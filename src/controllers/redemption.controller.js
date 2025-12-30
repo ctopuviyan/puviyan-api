@@ -1,4 +1,4 @@
-const redemptionService = require('../services/redemption.service');
+const redemptionService = require('../services/redemption.service.unified');
 const { HTTP_STATUS } = require('../config/constants');
 
 /**
@@ -41,17 +41,39 @@ async function scanRedemption(req, res, next) {
 }
 
 /**
+ * Calculate discount (for percent_off/amount_off rewards)
+ */
+async function calculateDiscount(req, res, next) {
+  try {
+    const { redemptionId, userId, billAmount } = req.body;
+    const partnerId = req.partner.id;
+
+    const result = await redemptionService.calculateDiscount({
+      redemptionId,
+      userId,
+      billAmount
+    });
+
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * Confirm redemption (after payment)
  */
 async function confirmRedemption(req, res, next) {
   try {
-    const { redemptionId, partnerTransactionId, appliedDiscount } = req.body;
+    const { redemptionId, userId, partnerTransactionId, billAmount, appliedDiscount } = req.body;
     const partnerId = req.partner.id;
 
     const result = await redemptionService.confirmRedemption({
       redemptionId,
+      userId,
       partnerId,
       partnerTransactionId,
+      billAmount,
       appliedDiscount
     });
 
@@ -66,11 +88,12 @@ async function confirmRedemption(req, res, next) {
  */
 async function rollbackRedemption(req, res, next) {
   try {
-    const { redemptionId, reason } = req.body;
+    const { redemptionId, userId, reason } = req.body;
     const partnerId = req.partner.id;
 
     const result = await redemptionService.rollbackRedemption({
       redemptionId,
+      userId,
       partnerId,
       reason
     });
@@ -123,6 +146,7 @@ async function getRedemptionDetails(req, res, next) {
 module.exports = {
   initiateRedemption,
   scanRedemption,
+  calculateDiscount,
   confirmRedemption,
   rollbackRedemption,
   getRedemptionHistory,

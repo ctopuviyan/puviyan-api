@@ -68,7 +68,52 @@ async function calculateDiscount({ userId, points, partnerId }) {
 }
 
 /**
- * Deduct points from user's balance
+ * Reserve points (lock but don't deduct)
+ */
+async function reservePoints(userId, points, redemptionId) {
+  const db = getFirestore();
+
+  const pointsRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance');
+
+  try {
+    await db.runTransaction(async (transaction) => {
+      const pointsDoc = await transaction.get(pointsRef);
+      
+      if (!pointsDoc.exists) {
+        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, 'User has no points');
+      }
+
+      const currentBalance = pointsDoc.data().balance || 0;
+      const reserved = pointsDoc.data().reserved || 0;
+
+      if (currentBalance < points) {
+        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, 'Insufficient points balance');
+      }
+
+      // Lock points (increase reserved, don't change balance yet)
+      transaction.update(pointsRef, {
+        reserved: reserved + points,
+        lastUpdated: new Date()
+      });
+
+      // Log reservation
+      const logRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc();
+      transaction.set(logRef, {
+        type: 'reserve',
+        points,
+        redemptionId,
+        timestamp: new Date(),
+        balanceBefore: currentBalance,
+        reservedBefore: reserved
+      });
+    });
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Deduct points from user's balance (called on redemption confirmation)
  */
 async function deductPoints(userId, points, redemptionId) {
   const db = getFirestore();
@@ -84,17 +129,21 @@ async function deductPoints(userId, points, redemptionId) {
       }
 
       const currentBalance = pointsDoc.data().balance || 0;
+      const reserved = pointsDoc.data().reserved || 0;
 
       if (currentBalance < points) {
         throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, 'Insufficient points balance');
       }
 
+      // Actually deduct from balance and reduce reserved
       const newBalance = currentBalance - points;
       const redeemed = (pointsDoc.data().redeemed || 0) + points;
+      const newReserved = Math.max(0, reserved - points);
 
       transaction.update(pointsRef, {
         balance: newBalance,
         redeemed,
+        reserved: newReserved,
         lastUpdated: new Date()
       });
 
@@ -116,7 +165,46 @@ async function deductPoints(userId, points, redemptionId) {
 }
 
 /**
- * Refund points to user's balance
+ * Release reserved points (called on cancellation)
+ */
+async function releasePoints(userId, points, redemptionId) {
+  const db = getFirestore();
+
+  const pointsRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance');
+
+  try {
+    await db.runTransaction(async (transaction) => {
+      const pointsDoc = await transaction.get(pointsRef);
+      
+      if (!pointsDoc.exists) {
+        return;
+      }
+
+      const reserved = pointsDoc.data().reserved || 0;
+      const newReserved = Math.max(0, reserved - points);
+
+      transaction.update(pointsRef, {
+        reserved: newReserved,
+        lastUpdated: new Date()
+      });
+
+      // Log release
+      const logRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc();
+      transaction.set(logRef, {
+        type: 'release',
+        points,
+        redemptionId,
+        timestamp: new Date()
+      });
+    });
+  } catch (error) {
+    console.error('Error releasing points:', error);
+    throw error;
+  }
+}
+
+/**
+ * Refund points to user's balance (for already redeemed points)
  */
 async function refundPoints(userId, points, redemptionId) {
   const db = getFirestore();
@@ -191,7 +279,9 @@ async function getAvailableOffers({ partnerId, category }) {
 module.exports = {
   getPointsBalance,
   calculateDiscount,
+  reservePoints,
   deductPoints,
+  releasePoints,
   refundPoints,
   getAvailableOffers
 };

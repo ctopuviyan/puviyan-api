@@ -9,6 +9,8 @@ const { initializeFirebase } = require('./config/firebase.config');
 const { errorHandler } = require('./middleware/error.middleware');
 
 // Import routes
+const rewardsRoutes = require('./routes/rewards.routes');
+const rewardsManagementRoutes = require('./routes/rewards-management.routes');
 const redemptionRoutes = require('./routes/redemption.routes');
 const partnerRoutes = require('./routes/partner.routes');
 const pointsRoutes = require('./routes/points.routes');
@@ -42,6 +44,8 @@ app.get('/health', (req, res) => {
 });
 
 // API routes
+app.use(`/api/${API_VERSION}/rewards`, rewardsRoutes);
+app.use(`/api/${API_VERSION}/rewards-management`, rewardsManagementRoutes);
 app.use(`/api/${API_VERSION}/redemption`, redemptionRoutes);
 app.use(`/api/${API_VERSION}/partners`, partnerRoutes);
 app.use(`/api/${API_VERSION}/points`, pointsRoutes);

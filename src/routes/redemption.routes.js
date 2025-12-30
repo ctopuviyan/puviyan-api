@@ -18,6 +18,12 @@ router.post('/initiate', verifyFirebaseToken, redemptionLimiter, redemptionContr
 router.post('/scan', verifyPartnerKey, partnerScanLimiter, redemptionController.scanRedemption);
 
 /**
+ * Calculate discount (for percent_off/amount_off rewards)
+ * Requires: Partner API key
+ */
+router.post('/calculate', verifyPartnerKey, redemptionController.calculateDiscount);
+
+/**
  * Confirm redemption (after payment)
  * Requires: Partner API key
  */
