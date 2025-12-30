@@ -3,7 +3,16 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
-require('dotenv').config();
+const path = require('path');
+
+// Load environment-specific .env file
+const envFile = process.env.NODE_ENV === 'production' 
+  ? '.env.production' 
+  : process.env.NODE_ENV === 'staging' 
+    ? '.env.stage' 
+    : '.env';
+
+require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
 
 const { initializeFirebase } = require('./config/firebase.config');
 const { errorHandler } = require('./middleware/error.middleware');
