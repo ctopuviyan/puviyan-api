@@ -4,6 +4,7 @@ const { ApiError } = require('../middleware/error.middleware');
 const tokenService = require('./token.service');
 const pointsService = require('./points.service');
 const QRCode = require('qrcode');
+const { userOrgCache } = require('../middleware/cache.middleware');
 
 /**
  * Rewards Service - Handles browsing and reserving rewards
@@ -12,9 +13,29 @@ const QRCode = require('qrcode');
 
 /**
  * Get all available rewards
+ * Optionally filter by userId to show org-specific rewards
  */
-async function getAvailableRewards({ category, rewardType, status = 'active', limit = 20, offset = 0 }) {
+async function getAvailableRewards({ category, rewardType, status = 'active', limit = 20, offset = 0, userId = null }) {
   const db = getFirestore();
+
+  // Get user's orgId if userId provided (with caching)
+  let userOrgId = null;
+  if (userId) {
+    // Check cache first
+    const cacheKey = `user_org_${userId}`;
+    userOrgId = userOrgCache.get(cacheKey);
+    
+    if (userOrgId === null) {
+      // Cache miss - fetch from database
+      const userDoc = await db.collection('informations').doc(userId).get();
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        userOrgId = userData.orgMembership?.orgId || null;
+        // Cache for 30 minutes
+        userOrgCache.set(cacheKey, userOrgId, 30 * 60 * 1000);
+      }
+    }
+  }
 
   let query = db.collection('rewards')
     .where('status', '==', status)
@@ -34,30 +55,40 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
 
   const snapshot = await query.get();
 
-  const rewards = snapshot.docs.map(doc => {
-    const data = doc.data();
-    return {
-      rewardId: doc.id,
-      rewardTitle: data.rewardTitle,
-      rewardSubtitle: data.rewardSubtitle,
-      rewardType: data.rewardType || 'coupon',
-      brandName: data.brandName,
-      deductPoints: data.deductPoints,
-      availableCoupons: data.availableCoupons,
-      maxPerUser: data.maxPerUser,
-      validFrom: data.validFrom?.toDate?.()?.toISOString(),
-      validTo: data.validTo?.toDate?.()?.toISOString(),
-      previewImage: data.previewImage,
-      carbonContribution: data.carbonContribution,
-      discountPercent: data.discountPercent,
-      discountAmount: data.discountAmount,
-      minPurchaseAmount: data.minPurchaseAmount
-    };
-  });
+  // Filter rewards based on orgId
+  const rewards = snapshot.docs
+    .map(doc => {
+      const data = doc.data();
+      return {
+        rewardId: doc.id,
+        rewardTitle: data.rewardTitle,
+        rewardSubtitle: data.rewardSubtitle,
+        rewardType: data.rewardType || 'coupon',
+        brandName: data.brandName,
+        deductPoints: data.deductPoints,
+        availableCoupons: data.availableCoupons,
+        maxPerUser: data.maxPerUser,
+        validFrom: data.validFrom?.toDate?.()?.toISOString(),
+        validTo: data.validTo?.toDate?.()?.toISOString(),
+        previewImage: data.previewImage,
+        carbonContribution: data.carbonContribution,
+        discountPercent: data.discountPercent,
+        discountAmount: data.discountAmount,
+        minPurchaseAmount: data.minPurchaseAmount,
+        orgId: data.orgId // Include orgId in response
+      };
+    })
+    .filter(reward => {
+      // If reward has no orgId, it's available to everyone
+      if (!reward.orgId) return true;
+      
+      // If reward has orgId, only show to users with matching orgId
+      return userOrgId && reward.orgId === userOrgId;
+    });
 
   return {
     rewards,
-    total: snapshot.size,
+    total: rewards.length,
     limit,
     offset
   };
@@ -97,28 +128,44 @@ async function reserveReward({ userId, rewardId }) {
   const rewardDoc = await db.collection('rewards').doc(rewardId).get();
   
   if (!rewardDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.VALIDATION_ERROR, 'Reward not found');
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RWD_NOT_FOUND, 'Reward not found');
   }
 
   const reward = rewardDoc.data();
 
+  // Validate org-specific rewards
+  if (reward.orgId) {
+    // Get user's orgId
+    const userDoc = await db.collection('informations').doc(userId).get();
+    if (!userDoc.exists) {
+      throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_NOT_FOUND, 'User not found');
+    }
+    
+    const userData = userDoc.data();
+    const userOrgId = userData.orgMembership?.orgId || null;
+    
+    if (!userOrgId || userOrgId !== reward.orgId) {
+      throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.RWD_ORG_RESTRICTED, 'This reward is only available to members of a specific organization');
+    }
+  }
+
   // Validate reward is active and not expired
   if (reward.status !== 'active') {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This reward is not active');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RWD_NOT_ACTIVE, 'This reward is not active');
   }
 
   const now = new Date();
   if (reward.validTo?.toDate() < now) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This reward has expired');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RWD_EXPIRED, 'This reward has expired');
   }
 
   if (reward.validFrom?.toDate() > now) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This reward is not yet available');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RWD_NOT_AVAILABLE, 'This reward is not yet available');
   }
 
   // Check availability (for coupon type)
   if (reward.rewardType === 'coupon' && reward.availableCoupons <= 0) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, 'OUT_OF_STOCK', 'This reward is currently out of stock');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RWD_OUT_OF_STOCK, 'This reward is currently out of stock');
   }
 
   // Check max per user limit
@@ -130,13 +177,13 @@ async function reserveReward({ userId, rewardId }) {
     .get();
 
   if (userRedemptionsSnapshot.size >= (reward.maxPerUser || 999)) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, 'MAX_REDEMPTIONS_REACHED', 'You have already redeemed this reward the maximum number of times');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RWD_MAX_LIMIT_REACHED, 'You have already redeemed this reward the maximum number of times');
   }
 
   // Check user's points balance
   const userPoints = await pointsService.getPointsBalance(userId);
   if (userPoints.balance < reward.deductPoints) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, `You need ${reward.deductPoints} points but have ${userPoints.balance}`);
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.PTS_INSUFFICIENT_BALANCE, `You need ${reward.deductPoints} points but have ${userPoints.balance}`);
   }
 
   // Create redemption using transaction

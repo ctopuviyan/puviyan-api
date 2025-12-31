@@ -2,6 +2,8 @@
  * Application constants
  */
 
+const { ERROR_CODES, ERROR_MESSAGES } = require('./error-codes');
+
 module.exports = {
   // Firestore collections
   COLLECTIONS: {
@@ -42,18 +44,9 @@ module.exports = {
     JWT: process.env.JWT_EXPIRY || '15m'
   },
 
-  // Error codes
-  ERROR_CODES: {
-    INVALID_TOKEN: 'INVALID_TOKEN',
-    EXPIRED_TOKEN: 'EXPIRED_TOKEN',
-    INSUFFICIENT_POINTS: 'INSUFFICIENT_POINTS',
-    INVALID_PARTNER: 'INVALID_PARTNER',
-    REDEMPTION_NOT_FOUND: 'REDEMPTION_NOT_FOUND',
-    ALREADY_REDEEMED: 'ALREADY_REDEEMED',
-    UNAUTHORIZED: 'UNAUTHORIZED',
-    VALIDATION_ERROR: 'VALIDATION_ERROR',
-    SERVER_ERROR: 'SERVER_ERROR'
-  },
+  // Error codes and messages (imported from error-codes.js)
+  ERROR_CODES,
+  ERROR_MESSAGES,
 
   // HTTP status codes
   HTTP_STATUS: {

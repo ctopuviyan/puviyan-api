@@ -10,7 +10,7 @@ async function verifyFirebaseToken(req, res, next) {
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(HTTP_STATUS.UNAUTHORIZED).json({
-        error: ERROR_CODES.UNAUTHORIZED,
+        errorCode: ERROR_CODES.AUTH_MISSING_HEADER,
         message: 'Missing or invalid authorization header'
       });
     }
@@ -29,7 +29,7 @@ async function verifyFirebaseToken(req, res, next) {
   } catch (error) {
     console.error('Token verification error:', error);
     return res.status(HTTP_STATUS.UNAUTHORIZED).json({
-      error: ERROR_CODES.INVALID_TOKEN,
+      errorCode: ERROR_CODES.AUTH_INVALID_TOKEN,
       message: 'Invalid or expired token'
     });
   }

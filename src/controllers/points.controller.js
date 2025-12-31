@@ -54,8 +54,31 @@ async function getAvailableOffers(req, res, next) {
   }
 }
 
+/**
+ * Add points to user (for testing)
+ */
+async function addPoints(req, res, next) {
+  try {
+    const { userId, points, reason } = req.body;
+    
+    if (!userId || !points) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: 'userId and points are required'
+      });
+    }
+
+    const result = await pointsService.addPoints(userId, points, reason || 'Testing');
+
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getPointsBalance,
   calculateDiscount,
-  getAvailableOffers
+  getAvailableOffers,
+  addPoints
 };

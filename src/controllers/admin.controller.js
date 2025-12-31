@@ -7,10 +7,13 @@ const { HTTP_STATUS } = require('../config/constants');
 async function createPartner(req, res, next) {
   try {
     const partnerData = req.body;
-    const adminUserId = req.user.uid;
+    // For testing: allow without auth, for production: require req.user.uid
+    const adminUserId = req.user?.uid || 'test-admin';
 
-    // TODO: Add admin role verification
-    // For now, any authenticated user can create partners (change in production)
+    // TODO: Add admin role verification in production
+    // if (!req.user || !req.user.isAdmin) {
+    //   throw new ApiError(403, 'FORBIDDEN', 'Admin access required');
+    // }
 
     const result = await adminService.createPartner(partnerData, adminUserId);
 

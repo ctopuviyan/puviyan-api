@@ -6,14 +6,15 @@ const { HTTP_STATUS } = require('../config/constants');
  */
 async function getAvailableRewards(req, res, next) {
   try {
-    const { category, rewardType, status, limit = 20, offset = 0 } = req.query;
+    const { category, rewardType, status, limit = 20, offset = 0, userId } = req.query;
 
     const result = await rewardsService.getAvailableRewards({
       category,
       rewardType,
       status,
       limit: parseInt(limit),
-      offset: parseInt(offset)
+      offset: parseInt(offset),
+      userId // Pass userId to filter org-specific rewards
     });
 
     res.status(HTTP_STATUS.OK).json(result);
@@ -42,11 +43,19 @@ async function getRewardDetails(req, res, next) {
  */
 async function reserveReward(req, res, next) {
   try {
-    const { rewardId } = req.body;
-    const userId = req.user.uid;
+    const { rewardId, userId } = req.body;
+    // For testing: accept userId from body, for production: use req.user.uid
+    const actualUserId = req.user?.uid || userId;
+
+    if (!actualUserId) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: 'userId is required (in body for testing, or via auth token for production)'
+      });
+    }
 
     const result = await rewardsService.reserveReward({
-      userId,
+      userId: actualUserId,
       rewardId
     });
 

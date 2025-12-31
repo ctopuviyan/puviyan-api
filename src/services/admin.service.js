@@ -10,11 +10,8 @@ async function createPartner(partnerData, adminUserId) {
   const db = getFirestore();
 
   // Validate required fields
-  const requiredFields = ['name', 'category', 'location'];
-  for (const field of requiredFields) {
-    if (!partnerData[field]) {
-      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Missing required field: ${field}`);
-    }
+  if (!partnerData.name) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_MISSING_FIELD, 'Missing required field: name');
   }
 
   // Generate API key for partner
@@ -22,15 +19,19 @@ async function createPartner(partnerData, adminUserId) {
   const apiKey = tokenService.generatePartnerApiKey(partnerId);
 
   const partner = {
+    partnerId,
     name: partnerData.name,
+    brandName: partnerData.brandName || partnerData.name,
     logo: partnerData.logo || '',
-    category: partnerData.category,
-    location: partnerData.location,
+    categories: partnerData.categories || [],
+    locations: partnerData.locations || [],
+    contactInfo: partnerData.contactInfo || {},
+    businessInfo: partnerData.businessInfo || {},
     redemptionRate: partnerData.redemptionRate || 10,
     isActive: true,
     apiKey,
-    offers: partnerData.offers || [],
     createdAt: new Date(),
+    updatedAt: new Date(),
     createdBy: adminUserId,
     stats: {
       totalRedemptions: 0,
@@ -41,8 +42,10 @@ async function createPartner(partnerData, adminUserId) {
   await db.collection(COLLECTIONS.PARTNERS).doc(partnerId).set(partner);
 
   return {
-    id: partnerId,
-    ...partner,
+    partnerId,
+    apiKey,
+    name: partner.name,
+    brandName: partner.brandName,
     message: 'Partner created successfully'
   };
 }
@@ -55,7 +58,7 @@ async function updatePartner(partnerId, updates, adminUserId) {
 
   const partnerDoc = await db.collection(COLLECTIONS.PARTNERS).doc(partnerId).get();
   if (!partnerDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.INVALID_PARTNER, 'Partner not found');
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.PTR_NOT_FOUND, 'Partner not found');
   }
 
   // Don't allow updating certain fields
@@ -84,7 +87,7 @@ async function deletePartner(partnerId, adminUserId) {
 
   const partnerDoc = await db.collection(COLLECTIONS.PARTNERS).doc(partnerId).get();
   if (!partnerDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.INVALID_PARTNER, 'Partner not found');
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.PTR_NOT_FOUND, 'Partner not found');
   }
 
   await db.collection(COLLECTIONS.PARTNERS).doc(partnerId).update({

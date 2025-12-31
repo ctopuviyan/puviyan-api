@@ -22,4 +22,10 @@ router.post('/calculate', verifyFirebaseToken, apiLimiter, pointsController.calc
  */
 router.get('/offers', apiLimiter, pointsController.getAvailableOffers);
 
+/**
+ * Add points to user (for testing only)
+ * No auth required for testing
+ */
+router.post('/add', apiLimiter, pointsController.addPoints);
+
 module.exports = router;

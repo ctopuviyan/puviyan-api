@@ -106,6 +106,9 @@ async function createReward(rewardData, createdBy) {
     // Categories
     categories: rewardData.categories || [],
     
+    // Organization-specific (optional - null means available to all users)
+    orgId: rewardData.orgId || null,
+    
     // Timestamps
     createdAt: new Date(),
     updatedAt: new Date(),

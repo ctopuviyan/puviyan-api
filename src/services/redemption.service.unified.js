@@ -26,30 +26,30 @@ async function scanRedemption({ qrToken, partnerId }) {
   const redemptionDoc = await redemptionRef.get();
 
   if (!redemptionDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.REDEMPTION_NOT_FOUND, 'Redemption not found');
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RDM_NOT_FOUND, 'Redemption not found');
   }
 
   const redemption = redemptionDoc.data();
 
   // Verify partner matches (if partnerId is set in reward)
   if (redemption.partnerId && redemption.partnerId !== partnerId) {
-    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.INVALID_PARTNER, 'This reward is not valid at your location');
+    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.PTR_INVALID, 'This reward is not valid at your location');
   }
 
   // Check if already redeemed
   if (redemption.status === 'redeemed') {
-    throw new ApiError(HTTP_STATUS.CONFLICT, 'ALREADY_REDEEMED', 'This reward has already been used');
+    throw new ApiError(HTTP_STATUS.CONFLICT, ERROR_CODES.RDM_ALREADY_USED, 'This reward has already been used');
   }
 
   // Check if expired
   if (new Date() > redemption.expiresAt.toDate()) {
     await redemptionRef.update({ status: 'expired' });
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, 'EXPIRED_TOKEN', 'This reward has expired');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RDM_EXPIRED, 'This reward has expired');
   }
 
   // Check if cancelled
   if (redemption.status === 'cancelled') {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This reward has been cancelled');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RDM_CANCELLED, 'This reward has been cancelled');
   }
 
   // Update status to active (scanned)
@@ -112,14 +112,14 @@ async function calculateDiscount({ redemptionId, userId, billAmount }) {
   const redemptionDoc = await redemptionRef.get();
 
   if (!redemptionDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.REDEMPTION_NOT_FOUND, 'Redemption not found');
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RDM_NOT_FOUND, 'Redemption not found');
   }
 
   const redemption = redemptionDoc.data();
 
   // Only applicable for percent_off and amount_off
   if (redemption.rewardType === 'coupon') {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Discount calculation not applicable for coupon type');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_VALIDATION_ERROR, 'Discount calculation not applicable for coupon type');
   }
 
   // Check minimum purchase amount
@@ -183,19 +183,37 @@ async function confirmRedemption({ redemptionId, userId, partnerId, partnerTrans
   const redemptionDoc = await redemptionRef.get();
 
   if (!redemptionDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.REDEMPTION_NOT_FOUND, 'Redemption not found');
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RDM_NOT_FOUND, 'Redemption not found');
   }
 
   const redemption = redemptionDoc.data();
 
   // Verify partner (if partnerId is set)
   if (redemption.partnerId && redemption.partnerId !== partnerId) {
-    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.INVALID_PARTNER, 'Partner mismatch');
+    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.PTR_INVALID, 'Partner mismatch');
   }
 
   // Verify status
   if (redemption.status !== 'active') {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Redemption must be in active status');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_VALIDATION_ERROR, 'Redemption must be in active status');
+  }
+
+  // Validate required fields for discount-based rewards
+  if (redemption.rewardType !== 'coupon') {
+    if (!billAmount || billAmount <= 0) {
+      throw new ApiError(
+        HTTP_STATUS.BAD_REQUEST,
+        ERROR_CODES.VAL_MISSING_FIELD,
+        'billAmount is required and must be greater than 0 for discount-based rewards'
+      );
+    }
+    if (appliedDiscount === undefined || appliedDiscount === null || appliedDiscount < 0) {
+      throw new ApiError(
+        HTTP_STATUS.BAD_REQUEST,
+        ERROR_CODES.VAL_MISSING_FIELD,
+        'appliedDiscount is required and must be 0 or greater for discount-based rewards'
+      );
+    }
   }
 
   // ACTUALLY DEDUCT POINTS NOW (they were only reserved before)
@@ -205,14 +223,22 @@ async function confirmRedemption({ redemptionId, userId, partnerId, partnerTrans
   const updateData = {
     status: 'redeemed',
     redeemedAt: new Date(),
-    redeemedBy: partnerId,
-    partnerTransactionId: partnerTransactionId || null
+    redeemedBy: partnerId
   };
 
-  // Add bill and discount info for percent_off/amount_off
+  // Add optional fields only if they have values
+  if (partnerTransactionId) {
+    updateData.partnerTransactionId = partnerTransactionId;
+  }
+
+  // Add bill and discount info for percent_off/amount_off (only if provided)
   if (redemption.rewardType !== 'coupon') {
-    updateData.billAmount = billAmount;
-    updateData.appliedDiscount = appliedDiscount;
+    if (billAmount !== undefined && billAmount !== null) {
+      updateData.billAmount = billAmount;
+    }
+    if (appliedDiscount !== undefined && appliedDiscount !== null) {
+      updateData.appliedDiscount = appliedDiscount;
+    }
   }
 
   await redemptionRef.update(updateData);
@@ -254,19 +280,19 @@ async function rollbackRedemption({ redemptionId, userId, partnerId, reason }) {
   const redemptionDoc = await redemptionRef.get();
 
   if (!redemptionDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.REDEMPTION_NOT_FOUND, 'Redemption not found');
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RDM_NOT_FOUND, 'Redemption not found');
   }
 
   const redemption = redemptionDoc.data();
 
   // Verify partner
   if (redemption.partnerId && redemption.partnerId !== partnerId) {
-    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.INVALID_PARTNER, 'Partner mismatch');
+    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.PTR_INVALID, 'Partner mismatch');
   }
 
   // Can only rollback active redemptions
   if (redemption.status !== 'active') {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Can only rollback active redemptions');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_VALIDATION_ERROR, 'Can only rollback active redemptions');
   }
 
   // Update status

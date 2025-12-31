@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Puviyan Rewards - Testing Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            color: #667eea;
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .tab-btn {
+            padding: 12px 24px;
+            background: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: #667eea;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .tab-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        
+        .tab-btn.active {
+            background: #667eea;
+            color: white;
+        }
+        
+        .tab-content {
+            display: none;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+        
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .btn {
+            padding: 12px 32px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .response-box {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            display: none;
+        }
+        
+        .response-box.show {
+            display: block;
+        }
+        
+        .response-box.error {
+            border-left-color: #e74c3c;
+            background: #fee;
+        }
+        
+        .response-box.success {
+            border-left-color: #27ae60;
+            background: #efe;
+        }
+        
+        .response-box pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #333;
+        }
+        
+        .config-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .config-section h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+        
+        .reward-type-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .reward-type-btn {
+            flex: 1;
+            padding: 15px;
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        
+        .reward-type-btn:hover {
+            border-color: #667eea;
+        }
+        
+        .reward-type-btn.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .reward-type-btn h4 {
+            margin-bottom: 5px;
+            font-size: 16px;
+        }
+        
+        .reward-type-btn p {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        
+        .type-specific-fields {
+            display: none;
+        }
+        
+        .type-specific-fields.active {
+            display: block;
+        }
+        
+        .qr-display {
+            text-align: center;
+            padding: 20px;
+        }
+        
+        .qr-display img {
+            max-width: 300px;
+            border: 2px solid #667eea;
+            border-radius: 8px;
+            padding: 10px;
+            background: white;
+        }
+        
+        .api-endpoint {
+            background: #2d3748;
+            color: #68d391;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+        
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .info-box h4 {
+            color: #1976d2;
+            margin-bottom: 8px;
+        }
+        
+        .info-box p {
+            color: #555;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎁 Puviyan Rewards Testing Dashboard</h1>
+            <p>Test partner onboarding, reward creation, and redemption flows</p>
+        </div>
+        
+        <div class="config-section">
+            <h3>⚙️ API Configuration</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>API Base URL</label>
+                    <input type="text" id="apiBaseUrl" value="http://localhost:8080/api/v1" placeholder="http://localhost:8080/api/v1">
+                </div>
+                <div class="form-group">
+                    <label>Partner API Key (for redemption)</label>
+                    <input type="text" id="partnerApiKey" placeholder="Your partner API key">
+                </div>
+            </div>
+        </div>
+        
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('partner', event)">👥 Partner Onboarding</button>
+            <button class="tab-btn" onclick="switchTab('rewards', event)">🎁 Create Rewards</button>
+            <button class="tab-btn" onclick="switchTab('browse', event)">📋 Browse Rewards</button>
+            <button class="tab-btn" onclick="switchTab('reserve', event)">🎟️ Reserve Reward</button>
+            <button class="tab-btn" onclick="switchTab('scan', event)">📱 Scan QR</button>
+            <button class="tab-btn" onclick="switchTab('confirm', event)">✅ Confirm Redemption</button>
+        </div>
+        
+        <!-- Partner Onboarding Tab -->
+        <div id="partner-tab" class="tab-content active">
+            <h2>👥 Create Partner</h2>
+            <div class="info-box">
+                <h4>ℹ️ About Partner Onboarding</h4>
+                <p>Create a partner account to get an API key. This key will be used for scanning QR codes and confirming redemptions at partner stores.</p>
+            </div>
+            
+            <form id="partnerForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Partner Name *</label>
+                        <input type="text" name="name" required placeholder="e.g., GreenCafe">
+                    </div>
+                    <div class="form-group">
+                        <label>Brand Name *</label>
+                        <input type="text" name="brandName" required placeholder="e.g., GreenCafe">
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Email *</label>
+                        <input type="email" name="email" required placeholder="partner@greencafe.com">
+                    </div>
+                    <div class="form-group">
+                        <label>Phone</label>
+                        <input type="tel" name="phone" placeholder="+91-9876543210">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Categories (comma-separated)</label>
+                    <input type="text" name="categories" placeholder="cafe, food, sustainable">
+                </div>
+                
+                <button type="submit" class="btn">Create Partner</button>
+            </form>
+            
+            <div id="partnerResponse" class="response-box"></div>
+        </div>
+        
+        <!-- Create Rewards Tab -->
+        <div id="rewards-tab" class="tab-content">
+            <h2>🎁 Create Reward</h2>
+            <div class="info-box">
+                <h4>ℹ️ Reward Types</h4>
+                <p><strong>Coupon:</strong> Free items (e.g., "Free Coffee")<br>
+                <strong>Percent Off:</strong> Percentage discount (e.g., "20% off")<br>
+                <strong>Amount Off:</strong> Fixed discount (e.g., "₹50 off")</p>
+            </div>
+            
+            <div class="reward-type-selector">
+                <div class="reward-type-btn active" onclick="selectRewardType('coupon')">
+                    <h4>🎟️ Coupon</h4>
+                    <p>Free items</p>
+                </div>
+                <div class="reward-type-btn" onclick="selectRewardType('percent_off')">
+                    <h4>📊 Percent Off</h4>
+                    <p>% discount</p>
+                </div>
+                <div class="reward-type-btn" onclick="selectRewardType('amount_off')">
+                    <h4>💰 Amount Off</h4>
+                    <p>Fixed discount</p>
+                </div>
+            </div>
+            
+            <form id="rewardForm">
+                <input type="hidden" name="rewardType" id="rewardType" value="coupon">
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Reward Title *</label>
+                        <input type="text" name="rewardTitle" required placeholder="e.g., Free Organic Coffee">
+                    </div>
+                    <div class="form-group">
+                        <label>Brand Name *</label>
+                        <input type="text" name="brandName" required placeholder="e.g., GreenCafe">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Reward Subtitle</label>
+                    <input type="text" name="rewardSubtitle" placeholder="Short description">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Points to Deduct *</label>
+                        <input type="number" name="deductPoints" required min="1" value="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Per User *</label>
+                        <input type="number" name="maxPerUser" required min="1" value="1">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Organization ID (Optional)</label>
+                    <input type="text" name="orgId" placeholder="e.g., puviyan (leave empty for all users)">
+                    <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">
+                        If specified, only users belonging to this organization can see and redeem this reward.
+                    </small>
+                </div>
+                
+                <!-- Coupon Type Fields -->
+                <div id="coupon-fields" class="type-specific-fields active">
+                    <div class="form-group">
+                        <label>Total Coupons *</label>
+                        <input type="number" name="totalCoupons" min="1" value="100">
+                    </div>
+                </div>
+                
+                <!-- Percent Off Fields -->
+                <div id="percent_off-fields" class="type-specific-fields">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Discount Percent * (1-100)</label>
+                            <input type="number" name="discountPercent" min="1" max="100" value="20">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Discount Amount</label>
+                            <input type="number" name="maxDiscountAmount" min="0" placeholder="e.g., 500">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Min Purchase Amount</label>
+                        <input type="number" name="minPurchaseAmount" min="0" placeholder="e.g., 1000">
+                    </div>
+                </div>
+                
+                <!-- Amount Off Fields -->
+                <div id="amount_off-fields" class="type-specific-fields">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Discount Amount *</label>
+                            <input type="number" name="discountAmount" min="1" value="50">
+                        </div>
+                        <div class="form-group">
+                            <label>Min Purchase Amount</label>
+                            <input type="number" name="minPurchaseAmount" min="0" placeholder="e.g., 500">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Valid From *</label>
+                        <input type="datetime-local" name="validFrom" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Valid To *</label>
+                        <input type="datetime-local" name="validTo" required>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label>Categories (comma-separated)</label>
+                    <input type="text" name="categories" placeholder="cafe, food, sustainable">
+                </div>
+                
+                <div class="form-group">
+                    <label>Status *</label>
+                    <select name="status" required>
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                
+                <button type="submit" class="btn">Create Reward</button>
+            </form>
+            
+            <div id="rewardResponse" class="response-box"></div>
+        </div>
+        
+        <!-- Browse Rewards Tab -->
+        <div id="browse-tab" class="tab-content">
+            <h2>📋 Browse Rewards</h2>
+            <div class="info-box">
+                <h4>ℹ️ Organization Filtering</h4>
+                <p>Enter a User ID to see rewards filtered by their organization membership. Leave empty to see all public rewards.</p>
+            </div>
+            <form id="browseForm">
+                <div class="form-group">
+                    <label>User ID (Optional - for org filtering)</label>
+                    <input type="text" name="userId" placeholder="Leave empty to see all public rewards">
+                </div>
+                <button type="submit" class="btn">Load Rewards</button>
+            </form>
+            <div id="browseResponse" class="response-box"></div>
+        </div>
+        
+        <!-- Reserve Reward Tab -->
+        <div id="reserve-tab" class="tab-content">
+            <h2>🎟️ Reserve Reward (User Action)</h2>
+            <div class="info-box">
+                <h4>ℹ️ About Reservation</h4>
+                <p>This simulates a user reserving a reward. Points will be locked (not deducted yet). You'll get a QR code to use in the scanning step.</p>
+            </div>
+            
+            <form id="reserveForm">
+                <div class="form-group">
+                    <label>Reward ID *</label>
+                    <input type="text" name="rewardId" required placeholder="Get from Browse Rewards">
+                </div>
+                <div class="form-group">
+                    <label>User ID *</label>
+                    <input type="text" name="userId" required placeholder="Use real Firebase user ID">
+                    <small style="color: #666; font-size: 12px; display: block; margin-top: 5px;">
+                        Use an existing user ID from Firebase. Make sure the user has sufficient points in informationsPrivate collection.
+                    </small>
+                </div>
+                <button type="submit" class="btn">Reserve Reward</button>
+            </form>
+            
+            <div id="reserveResponse" class="response-box"></div>
+            <div id="qrDisplay" class="qr-display" style="display:none;">
+                <h3>QR Code</h3>
+                <div id="qrCode"></div>
+                <p style="margin-top: 15px; color: #666;">Copy the QR token below for scanning:</p>
+                <textarea id="qrToken" readonly style="width: 100%; height: 100px; margin-top: 10px; font-family: monospace; font-size: 11px;"></textarea>
+            </div>
+        </div>
+        
+        <!-- Scan QR Tab -->
+        <div id="scan-tab" class="tab-content">
+            <h2>📱 Scan QR Code (Partner Action)</h2>
+            <div class="info-box">
+                <h4>ℹ️ About Scanning</h4>
+                <p>Partner scans the user's QR code to validate the redemption. Use the QR token from the reservation step.</p>
+            </div>
+            
+            <form id="scanForm">
+                <div class="form-group">
+                    <label>QR Token *</label>
+                    <textarea name="qrToken" required placeholder="Paste QR token from reservation" rows="4"></textarea>
+                </div>
+                <button type="submit" class="btn">Scan QR Code</button>
+            </form>
+            
+            <div id="scanResponse" class="response-box"></div>
+        </div>
+        
+        <!-- Confirm Redemption Tab -->
+        <div id="confirm-tab" class="tab-content">
+            <h2>✅ Confirm Redemption (Partner Action)</h2>
+            <div class="info-box">
+                <h4>ℹ️ About Confirmation</h4>
+                <p>After providing the service/discount, partner confirms the redemption. This is when points are actually deducted from the user's balance.</p>
+            </div>
+            
+            <form id="confirmForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Redemption ID *</label>
+                        <input type="text" name="redemptionId" required placeholder="From scan response">
+                    </div>
+                    <div class="form-group">
+                        <label>User ID *</label>
+                        <input type="text" name="userId" required placeholder="From scan response">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Bill Amount (for discounts)</label>
+                        <input type="number" name="billAmount" min="0" placeholder="e.g., 1500">
+                    </div>
+                    <div class="form-group">
+                        <label>Applied Discount (for discounts)</label>
+                        <input type="number" name="appliedDiscount" min="0" placeholder="e.g., 300">
+                    </div>
+                </div>
+                <button type="submit" class="btn">Confirm Redemption</button>
+            </form>
+            
+            <div id="confirmResponse" class="response-box"></div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

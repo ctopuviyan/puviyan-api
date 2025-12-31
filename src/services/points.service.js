@@ -8,23 +8,20 @@ const { ApiError } = require('../middleware/error.middleware');
 async function getPointsBalance(userId) {
   const db = getFirestore();
 
-  // Points are stored in users/{uid}/points subcollection or as a field
-  // For now, using a simple document structure
-  const pointsDoc = await db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance').get();
+  // Points are stored in informations collection with puviyanPoints field
+  const userDoc = await db.collection('informations').doc(userId).get();
 
-  if (!pointsDoc.exists) {
-    // Initialize points if not exists
-    const initialBalance = {
-      balance: 0,
-      earned: 0,
-      redeemed: 0,
-      lastUpdated: new Date()
-    };
-    await db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance').set(initialBalance);
-    return initialBalance;
+  if (!userDoc.exists) {
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_NOT_FOUND, 'User not found');
   }
 
-  return pointsDoc.data();
+  const userData = userDoc.data();
+  return {
+    balance: userData.puviyanPoints || 0,
+    reserved: userData.reservedPoints || 0,
+    redeemed: userData.redeemedPoints || 0,
+    lastUpdated: userData.lastUpdated || new Date()
+  };
 }
 
 /**
@@ -35,13 +32,13 @@ async function calculateDiscount({ userId, points, partnerId }) {
 
   // Validate minimum points
   if (points < POINTS.MIN_REDEMPTION) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, `Minimum redemption is ${POINTS.MIN_REDEMPTION} points`);
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.PTS_INVALID_AMOUNT, `Minimum redemption is ${POINTS.MIN_REDEMPTION} points`);
   }
 
   // Get partner details for custom redemption rate
   const partnerDoc = await db.collection(COLLECTIONS.PARTNERS).doc(partnerId).get();
   if (!partnerDoc.exists) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INVALID_PARTNER, 'Partner not found');
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.PTR_NOT_FOUND, 'Partner not found');
   }
 
   const partner = partnerDoc.data();
@@ -53,7 +50,7 @@ async function calculateDiscount({ userId, points, partnerId }) {
 
   // Check max discount limit
   if (discount > POINTS.MAX_REDEMPTION_AMOUNT) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Maximum discount is ₹${POINTS.MAX_REDEMPTION_AMOUNT}`);
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.PTS_INVALID_AMOUNT, `Maximum discount is ₹${POINTS.MAX_REDEMPTION_AMOUNT}`);
   }
 
   return {
@@ -73,38 +70,28 @@ async function calculateDiscount({ userId, points, partnerId }) {
 async function reservePoints(userId, points, redemptionId) {
   const db = getFirestore();
 
-  const pointsRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance');
+  const userRef = db.collection('informations').doc(userId);
 
   try {
     await db.runTransaction(async (transaction) => {
-      const pointsDoc = await transaction.get(pointsRef);
+      const userDoc = await transaction.get(userRef);
       
-      if (!pointsDoc.exists) {
-        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, 'User has no points');
+      if (!userDoc.exists) {
+        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.USR_NOT_FOUND, 'User not found');
       }
 
-      const currentBalance = pointsDoc.data().balance || 0;
-      const reserved = pointsDoc.data().reserved || 0;
+      const userData = userDoc.data();
+      const currentBalance = userData.puviyanPoints || 0;
+      const reserved = userData.reservedPoints || 0;
 
       if (currentBalance < points) {
-        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, 'Insufficient points balance');
+        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.PTS_INSUFFICIENT_BALANCE, `Insufficient points balance. Available: ${currentBalance}, Required: ${points}`);
       }
 
-      // Lock points (increase reserved, don't change balance yet)
-      transaction.update(pointsRef, {
-        reserved: reserved + points,
+      // Lock points (increase reserved, don't change puviyanPoints yet)
+      transaction.update(userRef, {
+        reservedPoints: reserved + points,
         lastUpdated: new Date()
-      });
-
-      // Log reservation
-      const logRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc();
-      transaction.set(logRef, {
-        type: 'reserve',
-        points,
-        redemptionId,
-        timestamp: new Date(),
-        balanceBefore: currentBalance,
-        reservedBefore: reserved
       });
     });
   } catch (error) {
@@ -118,43 +105,27 @@ async function reservePoints(userId, points, redemptionId) {
 async function deductPoints(userId, points, redemptionId) {
   const db = getFirestore();
 
-  const pointsRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance');
+  const userRef = db.collection('informations').doc(userId);
 
   try {
     await db.runTransaction(async (transaction) => {
-      const pointsDoc = await transaction.get(pointsRef);
+      const userDoc = await transaction.get(userRef);
       
-      if (!pointsDoc.exists) {
-        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, 'User has no points');
+      if (!userDoc.exists) {
+        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.USR_NOT_FOUND, 'User not found');
       }
 
-      const currentBalance = pointsDoc.data().balance || 0;
-      const reserved = pointsDoc.data().reserved || 0;
+      const userData = userDoc.data();
+      const currentBalance = userData.puviyanPoints || 0;
+      const reserved = userData.reservedPoints || 0;
+      const redeemed = userData.redeemedPoints || 0;
 
-      if (currentBalance < points) {
-        throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.INSUFFICIENT_POINTS, 'Insufficient points balance');
-      }
-
-      // Actually deduct from balance and reduce reserved
-      const newBalance = currentBalance - points;
-      const redeemed = (pointsDoc.data().redeemed || 0) + points;
-      const newReserved = Math.max(0, reserved - points);
-
-      transaction.update(pointsRef, {
-        balance: newBalance,
-        redeemed,
-        reserved: newReserved,
+      // Deduct from puviyanPoints and reserved, add to redeemed
+      transaction.update(userRef, {
+        puviyanPoints: currentBalance - points,
+        reservedPoints: Math.max(0, reserved - points),
+        redeemedPoints: redeemed + points,
         lastUpdated: new Date()
-      });
-
-      // Add transaction record
-      const transactionRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc();
-      transaction.set(transactionRef, {
-        type: 'redeem',
-        points: -points,
-        redemptionId,
-        timestamp: new Date(),
-        balanceAfter: newBalance
       });
     });
 
@@ -170,35 +141,27 @@ async function deductPoints(userId, points, redemptionId) {
 async function releasePoints(userId, points, redemptionId) {
   const db = getFirestore();
 
-  const pointsRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance');
+  const userRef = db.collection('informations').doc(userId);
 
   try {
     await db.runTransaction(async (transaction) => {
-      const pointsDoc = await transaction.get(pointsRef);
+      const userDoc = await transaction.get(userRef);
       
-      if (!pointsDoc.exists) {
+      if (!userDoc.exists) {
+        // If user doesn't exist, nothing to release
         return;
       }
 
-      const reserved = pointsDoc.data().reserved || 0;
-      const newReserved = Math.max(0, reserved - points);
+      const userData = userDoc.data();
+      const reserved = userData.reservedPoints || 0;
 
-      transaction.update(pointsRef, {
-        reserved: newReserved,
+      // Release reserved points (decrease reserved)
+      transaction.update(userRef, {
+        reservedPoints: Math.max(0, reserved - points),
         lastUpdated: new Date()
-      });
-
-      // Log release
-      const logRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc();
-      transaction.set(logRef, {
-        type: 'release',
-        points,
-        redemptionId,
-        timestamp: new Date()
       });
     });
   } catch (error) {
-    console.error('Error releasing points:', error);
     throw error;
   }
 }
@@ -209,34 +172,25 @@ async function releasePoints(userId, points, redemptionId) {
 async function refundPoints(userId, points, redemptionId) {
   const db = getFirestore();
 
-  const pointsRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc('balance');
+  const userRef = db.collection('informations').doc(userId);
 
   try {
     await db.runTransaction(async (transaction) => {
-      const pointsDoc = await transaction.get(pointsRef);
+      const userDoc = await transaction.get(userRef);
       
-      if (!pointsDoc.exists) {
+      if (!userDoc.exists) {
         throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'User points record not found');
       }
 
-      const currentBalance = pointsDoc.data().balance || 0;
-      const newBalance = currentBalance + points;
-      const redeemed = Math.max((pointsDoc.data().redeemed || 0) - points, 0);
+      const userData = userDoc.data();
+      const currentBalance = userData.puviyanPoints || 0;
+      const redeemed = userData.redeemedPoints || 0;
 
-      transaction.update(pointsRef, {
-        balance: newBalance,
-        redeemed,
+      // Refund points to puviyanPoints and reduce redeemed
+      transaction.update(userRef, {
+        puviyanPoints: currentBalance + points,
+        redeemedPoints: Math.max(0, redeemed - points),
         lastUpdated: new Date()
-      });
-
-      // Add refund transaction record
-      const transactionRef = db.collection(COLLECTIONS.USERS).doc(userId).collection(COLLECTIONS.POINTS).doc();
-      transaction.set(transactionRef, {
-        type: 'refund',
-        points: points,
-        redemptionId,
-        timestamp: new Date(),
-        balanceAfter: newBalance
       });
     });
 
