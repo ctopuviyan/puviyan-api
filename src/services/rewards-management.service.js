@@ -64,7 +64,7 @@ async function createReward(rewardData, createdBy) {
     deductPoints: rewardData.deductPoints,
     
     // Coupon-specific fields
-    availableCoupons: rewardData.rewardType === 'coupon' ? rewardData.totalCoupons : null,
+    availableCoupons: rewardData.rewardType === 'coupon' ? (rewardData.availableCoupons || rewardData.totalCoupons) : null,
     totalCoupons: rewardData.rewardType === 'coupon' ? rewardData.totalCoupons : null,
     
     // Percent off fields
@@ -93,11 +93,13 @@ async function createReward(rewardData, createdBy) {
     
     // Images
     previewImage: rewardData.previewImage || '',
+    previewImageGreyed: rewardData.previewImageGreyed || '',
     fullImage: rewardData.fullImage || '',
+    fullImageGreyed: rewardData.fullImageGreyed || '',
     
     // Engagement
-    likeCount: 0,
-    dislikeCount: 0,
+    likeCount: rewardData.likeCount || 0,
+    dislikeCount: rewardData.dislikeCount || 0,
     usefulnessScore: rewardData.usefulnessScore || 0,
     
     // Impact

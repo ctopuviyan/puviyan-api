@@ -17,7 +17,8 @@ function initializeFirebase() {
 
     firebaseApp = admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
-      projectId: process.env.FIREBASE_PROJECT_ID
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      storageBucket: `${process.env.FIREBASE_PROJECT_ID}.firebasestorage.app`
     });
 
     console.log('✅ Firebase Admin SDK initialized successfully');

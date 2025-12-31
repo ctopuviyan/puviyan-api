@@ -180,8 +180,53 @@ async function createPartner(formData) {
     }
 }
 
+// Upload image helper function
+async function uploadImage(fileInputId, urlDisplayId) {
+    const fileInput = document.getElementById(fileInputId);
+    const urlDisplay = document.getElementById(urlDisplayId);
+    
+    if (!fileInput.files || fileInput.files.length === 0) {
+        return null;
+    }
+    
+    const file = fileInput.files[0];
+    const formData = new FormData();
+    formData.append('image', file);
+    formData.append('folder', 'rewards');
+    
+    try {
+        urlDisplay.textContent = '⏳ Uploading...';
+        
+        const response = await fetch(`${API_BASE_URL}/upload/image`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok) {
+            urlDisplay.textContent = `✅ Uploaded: ${result.imageUrl}`;
+            return result.imageUrl;
+        } else {
+            urlDisplay.textContent = `❌ Upload failed: ${result.message}`;
+            return null;
+        }
+    } catch (error) {
+        urlDisplay.textContent = `❌ Upload error: ${error.message}`;
+        return null;
+    }
+}
+
 async function createReward(formData) {
     try {
+        // Upload images first
+        showResponse('rewardResponse', { message: 'Uploading images...' });
+        
+        const previewImageUrl = await uploadImage('previewImage', 'previewImageUrl');
+        const previewImageGreyedUrl = await uploadImage('previewImageGreyed', 'previewImageGreyedUrl');
+        const fullImageUrl = await uploadImage('fullImage', 'fullImageUrl');
+        const fullImageGreyedUrl = await uploadImage('fullImageGreyed', 'fullImageGreyedUrl');
+        
         const rewardType = formData.get('rewardType');
         
         const data = {
@@ -197,6 +242,12 @@ async function createReward(formData) {
             categories: formData.get('categories') ? 
                 formData.get('categories').split(',').map(c => c.trim()) : []
         };
+        
+        // Add image URLs if uploaded
+        if (previewImageUrl) data.previewImage = previewImageUrl;
+        if (previewImageGreyedUrl) data.previewImageGreyed = previewImageGreyedUrl;
+        if (fullImageUrl) data.fullImage = fullImageUrl;
+        if (fullImageGreyedUrl) data.fullImageGreyed = fullImageGreyedUrl;
         
         // Add orgId if provided
         const orgId = formData.get('orgId');
@@ -222,6 +273,8 @@ async function createReward(formData) {
             }
         }
         
+        showResponse('rewardResponse', { message: 'Creating reward...' });
+        
         const response = await fetch(`${API_BASE_URL}/rewards-management`, {
             method: 'POST',
             headers: {
@@ -234,7 +287,7 @@ async function createReward(formData) {
         
         if (response.ok) {
             showResponse('rewardResponse', result);
-            alert('✅ Reward created! Copy the rewardId for testing.');
+            alert('✅ Reward created with images! Copy the rewardId for testing.');
         } else {
             showResponse('rewardResponse', result, true);
         }

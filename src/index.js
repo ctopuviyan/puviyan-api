@@ -24,6 +24,7 @@ const redemptionRoutes = require('./routes/redemption.routes');
 const partnerRoutes = require('./routes/partner.routes');
 const pointsRoutes = require('./routes/points.routes');
 const adminRoutes = require('./routes/admin.routes');
+const uploadRoutes = require('./routes/upload.routes');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -73,6 +74,7 @@ app.use(`/api/${API_VERSION}/redemption`, redemptionRoutes);
 app.use(`/api/${API_VERSION}/partners`, partnerRoutes);
 app.use(`/api/${API_VERSION}/points`, pointsRoutes);
 app.use(`/api/${API_VERSION}/admin`, adminRoutes);
+app.use(`/api/${API_VERSION}/upload`, uploadRoutes);
 
 // 404 handler
 app.use((req, res) => {
