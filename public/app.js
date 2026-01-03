@@ -1,5 +1,11 @@
 // API Configuration
-let API_BASE_URL = 'http://localhost:8080/api/v1';
+// Auto-detect API URL based on current host
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+const defaultApiUrl = isLocalhost 
+    ? 'http://localhost:8080/api/v1' 
+    : `${window.location.origin}/api/v1`;
+
+let API_BASE_URL = defaultApiUrl;
 let PARTNER_API_KEY = '';
 
 // Initialize
@@ -11,6 +17,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (savedUrl) {
         document.getElementById('apiBaseUrl').value = savedUrl;
         API_BASE_URL = savedUrl;
+    } else {
+        // Set default URL in the input field
+        document.getElementById('apiBaseUrl').value = defaultApiUrl;
     }
     
     if (savedKey) {
