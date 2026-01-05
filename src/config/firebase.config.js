@@ -12,11 +12,28 @@ function initializeFirebase() {
   }
 
   try {
-    const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || './service-account.json';
-    const serviceAccount = require(path.resolve(serviceAccountPath));
+    let credential;
+    
+    // Try to load service account file if path is provided
+    const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    
+    if (serviceAccountPath) {
+      try {
+        const serviceAccount = require(path.resolve(serviceAccountPath));
+        credential = admin.credential.cert(serviceAccount);
+        console.log('✅ Using service account credentials from file');
+      } catch (fileError) {
+        console.log('⚠️ Service account file not found, using Application Default Credentials');
+        credential = admin.credential.applicationDefault();
+      }
+    } else {
+      // Use Application Default Credentials (for Cloud Run)
+      console.log('✅ Using Application Default Credentials');
+      credential = admin.credential.applicationDefault();
+    }
 
     firebaseApp = admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
+      credential: credential,
       projectId: process.env.FIREBASE_PROJECT_ID,
       storageBucket: `${process.env.FIREBASE_PROJECT_ID}.firebasestorage.app`
     });

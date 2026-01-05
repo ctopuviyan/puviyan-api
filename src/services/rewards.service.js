@@ -71,10 +71,21 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
         validFrom: data.validFrom?.toDate?.()?.toISOString(),
         validTo: data.validTo?.toDate?.()?.toISOString(),
         previewImage: data.previewImage,
+        previewImageGreyed: data.previewImageGreyed,
+        fullImage: data.fullImage,
+        fullImageGreyed: data.fullImageGreyed,
         carbonContribution: data.carbonContribution,
         discountPercent: data.discountPercent,
         discountAmount: data.discountAmount,
         minPurchaseAmount: data.minPurchaseAmount,
+        rewardDetails: data.rewardDetails,
+        howToClaim: data.howToClaim,
+        likeCount: data.likeCount || 0,
+        dislikeCount: data.dislikeCount || 0,
+        usefulnessScore: data.usefulnessScore || 0,
+        status: data.status,
+        createdAt: data.createdAt?.toDate?.()?.toISOString(),
+        updatedAt: data.updatedAt?.toDate?.()?.toISOString(),
         orgId: data.orgId // Include orgId in response
       };
     })
