@@ -72,9 +72,65 @@ async function rotateInviteCode(req, res, next) {
   }
 }
 
+async function listAvailableOrganizations(req, res, next) {
+  try {
+    const { search, limit } = req.query;
+
+    const result = await partnerPortalService.listAvailableOrganizations({
+      partnerUid: req.partnerUser.uid,
+      searchQuery: search || '',
+      limit: parseInt(limit) || 50,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function requestOrgLink(req, res, next) {
+  try {
+    const { orgId, reason } = req.body || {};
+
+    const result = await partnerPortalService.requestOrgLink({
+      partnerUid: req.partnerUser.uid,
+      orgId,
+      reason,
+    });
+
+    res.status(HTTP_STATUS.CREATED).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getOrgLinkRequests(req, res, next) {
+  try {
+    const result = await partnerPortalService.getOrgLinkRequests({
+      partnerUid: req.partnerUser.uid,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMe,
   createOrg,
   joinOrg,
   rotateInviteCode,
+  listAvailableOrganizations,
+  requestOrgLink,
+  getOrgLinkRequests,
 };

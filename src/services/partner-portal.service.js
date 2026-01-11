@@ -261,9 +261,146 @@ async function rotateOrgInviteCode({ partnerUid, orgId }) {
   };
 }
 
+/**
+ * List available organizations for linking
+ */
+async function listAvailableOrganizations({ partnerUid, searchQuery = '', limit = 50 }) {
+  const db = getFirestore();
+
+  // Get partner's current org (if any)
+  const partnerUserDoc = await db.collection('partnerUsers').doc(partnerUid).get();
+  const currentOrgId = partnerUserDoc.exists ? partnerUserDoc.data()?.orgId : null;
+
+  let query = db.collection('organizations')
+    .where('status', '==', 'active')
+    .limit(limit);
+
+  // If search query provided, we'll filter in memory (Firestore doesn't support text search)
+  const snapshot = await query.get();
+  
+  let organizations = snapshot.docs
+    .filter(doc => doc.id !== currentOrgId) // Exclude current org
+    .map(doc => ({
+      id: doc.id,
+      name: doc.data().name || doc.id,
+      status: doc.data().status,
+      partnerManaged: doc.data().partnerManaged || false,
+      createdAt: doc.data().createdAt,
+    }));
+
+  // Filter by search query if provided
+  if (searchQuery) {
+    const lowerQuery = searchQuery.toLowerCase();
+    organizations = organizations.filter(org => 
+      org.name.toLowerCase().includes(lowerQuery) || 
+      org.id.toLowerCase().includes(lowerQuery)
+    );
+  }
+
+  return {
+    organizations,
+    total: organizations.length,
+  };
+}
+
+/**
+ * Request access to link to an organization
+ */
+async function requestOrgLink({ partnerUid, orgId, reason = '' }) {
+  const db = getFirestore();
+
+  // Verify partner user exists
+  const partnerUserDoc = await db.collection('partnerUsers').doc(partnerUid).get();
+  if (!partnerUserDoc.exists) {
+    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'User is not a partner');
+  }
+
+  const partnerUser = partnerUserDoc.data();
+  const currentOrgId = partnerUser.orgId;
+
+  if (!currentOrgId) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_INVALID_VALUE, 'Partner must be onboarded to an org first');
+  }
+
+  // Verify target organization exists
+  const orgDoc = await db.collection('organizations').doc(orgId).get();
+  if (!orgDoc.exists) {
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_INVALID_ORG, 'Organization not found');
+  }
+
+  // Check if link request already exists
+  const existingLinkQuery = await db.collection('partnerUsers')
+    .doc(partnerUid)
+    .collection('orgLinkRequests')
+    .where('orgId', '==', orgId)
+    .where('status', 'in', ['pending', 'approved'])
+    .limit(1)
+    .get();
+
+  if (!existingLinkQuery.empty) {
+    const existingStatus = existingLinkQuery.docs[0].data().status;
+    throw new ApiError(
+      HTTP_STATUS.CONFLICT,
+      ERROR_CODES.VAL_DUPLICATE_ENTRY,
+      `Link request already exists with status: ${existingStatus}`
+    );
+  }
+
+  // Create link request
+  const now = new Date();
+  const linkRequestRef = db.collection('partnerUsers')
+    .doc(partnerUid)
+    .collection('orgLinkRequests')
+    .doc();
+
+  await linkRequestRef.set({
+    orgId,
+    orgName: orgDoc.data().name || orgId,
+    status: 'pending', // pending, approved, rejected
+    reason: reason || '',
+    requestedAt: now,
+    requestedBy: partnerUid,
+    updatedAt: now,
+  });
+
+  return {
+    linkRequestId: linkRequestRef.id,
+    orgId,
+    status: 'pending',
+    message: 'Organization link request submitted. Awaiting approval.',
+  };
+}
+
+/**
+ * Get partner's organization link requests
+ */
+async function getOrgLinkRequests({ partnerUid }) {
+  const db = getFirestore();
+
+  const snapshot = await db.collection('partnerUsers')
+    .doc(partnerUid)
+    .collection('orgLinkRequests')
+    .orderBy('requestedAt', 'desc')
+    .limit(50)
+    .get();
+
+  const requests = snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+  }));
+
+  return {
+    requests,
+    total: requests.length,
+  };
+}
+
 module.exports = {
   getPartnerMe,
   createOrg,
   joinOrg,
   rotateOrgInviteCode,
+  listAvailableOrganizations,
+  requestOrgLink,
+  getOrgLinkRequests,
 };

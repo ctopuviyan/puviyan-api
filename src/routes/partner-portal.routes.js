@@ -74,4 +74,37 @@ router.get(
   employeeManagementController.getEmployees
 );
 
+/**
+ * List available organizations for linking
+ * Requires: Partner Firebase Auth token
+ */
+router.get(
+  '/organizations',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  partnerPortalController.listAvailableOrganizations
+);
+
+/**
+ * Request to link to an organization
+ * Requires: Partner Firebase Auth token
+ */
+router.post(
+  '/organizations/link',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  partnerPortalController.requestOrgLink
+);
+
+/**
+ * Get partner's organization link requests
+ * Requires: Partner Firebase Auth token
+ */
+router.get(
+  '/organizations/link-requests',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  partnerPortalController.getOrgLinkRequests
+);
+
 module.exports = router;
