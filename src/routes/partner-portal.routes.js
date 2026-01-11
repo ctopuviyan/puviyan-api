@@ -1,9 +1,26 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
 
 const { apiLimiter } = require('../middleware/rateLimit.middleware');
 const { verifyPartnerFirebaseToken } = require('../middleware/partner-auth.middleware');
 const partnerPortalController = require('../controllers/partner-portal.controller');
+const employeeManagementController = require('../controllers/employee-management.controller');
+
+// Configure multer for CSV uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max
+  },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only CSV files are allowed'));
+    }
+  },
+});
 
 /**
  * Partner Portal - Get current partner user context
@@ -32,6 +49,29 @@ router.post(
   verifyPartnerFirebaseToken,
   apiLimiter,
   partnerPortalController.rotateInviteCode
+);
+
+/**
+ * Upload CSV to bulk onboard employees
+ * Requires: Partner Firebase Auth token + access to org
+ */
+router.post(
+  '/orgs/:orgId/employees/upload',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  upload.single('file'),
+  employeeManagementController.uploadEmployeeCSV
+);
+
+/**
+ * Get employees for an organization
+ * Requires: Partner Firebase Auth token + access to org
+ */
+router.get(
+  '/orgs/:orgId/employees',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  employeeManagementController.getEmployees
 );
 
 module.exports = router;

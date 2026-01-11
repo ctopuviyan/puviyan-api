@@ -36,7 +36,7 @@ async function getPartnerMe({ partnerUid }) {
     throw new ApiError(HTTP_STATUS.INTERNAL_ERROR, ERROR_CODES.SYS_DATABASE_ERROR, 'partnerUsers record missing orgId');
   }
 
-  const orgDoc = await db.collection('orgs').doc(orgId).get();
+  const orgDoc = await db.collection('organizations').doc(orgId).get();
   const org = orgDoc.exists ? { id: orgDoc.id, ...orgDoc.data() } : { id: orgId };
 
   const scope = partnerUser.scope || { type: 'org' };
@@ -47,7 +47,7 @@ async function getPartnerMe({ partnerUid }) {
     const deptIds = scope.departmentIds.filter(Boolean);
     const deptDocs = await Promise.all(
       deptIds.map(async (departmentId) => {
-        const d = await db.collection('orgs').doc(orgId).collection('departments').doc(departmentId).get();
+        const d = await db.collection('organizations').doc(orgId).collection('departments').doc(departmentId).get();
         if (!d.exists) {
           return { id: departmentId, name: departmentId, status: 'unknown' };
         }
@@ -58,7 +58,7 @@ async function getPartnerMe({ partnerUid }) {
     allowedDepartments = deptDocs;
   } else {
     // Org-wide: return all departments (cap to 200)
-    const deptsSnap = await db.collection('orgs').doc(orgId).collection('departments').limit(200).get();
+    const deptsSnap = await db.collection('organizations').doc(orgId).collection('departments').limit(200).get();
     allowedDepartments = deptsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
   }
 
@@ -96,8 +96,8 @@ async function createOrg({ partnerUid, orgName, requestedOrgId = null }) {
   }
 
   const orgRef = requestedOrgId
-    ? db.collection('orgs').doc(requestedOrgId)
-    : db.collection('orgs').doc();
+    ? db.collection('organizations').doc(requestedOrgId)
+    : db.collection('organizations').doc();
 
   if (requestedOrgId) {
     const existingOrg = await orgRef.get();
@@ -121,6 +121,10 @@ async function createOrg({ partnerUid, orgName, requestedOrgId = null }) {
     createdAt: now,
     updatedAt: now,
     createdByPartnerUid: partnerUid,
+    // OrgOnboarder compatibility fields
+    currentEpoch: 0,
+    lastFinalizedEpoch: 0,
+    partnerManaged: true, // Flag to indicate this org is managed by partners
   });
 
   batch.set(
@@ -172,7 +176,7 @@ async function joinOrg({ partnerUid, orgId, inviteCode }) {
     }
   }
 
-  const orgRef = db.collection('orgs').doc(orgId);
+  const orgRef = db.collection('organizations').doc(orgId);
   const orgDoc = await orgRef.get();
   if (!orgDoc.exists) {
     throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_INVALID_ORG, 'Organization not found');
@@ -233,7 +237,7 @@ async function rotateOrgInviteCode({ partnerUid, orgId }) {
     throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Only org admins can rotate invite code');
   }
 
-  const orgRef = db.collection('orgs').doc(orgId);
+  const orgRef = db.collection('organizations').doc(orgId);
   const orgDoc = await orgRef.get();
   if (!orgDoc.exists) {
     throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_INVALID_ORG, 'Organization not found');
