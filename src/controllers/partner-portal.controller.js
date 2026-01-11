@@ -1,0 +1,80 @@
+const { HTTP_STATUS } = require('../config/constants');
+const partnerPortalService = require('../services/partner-portal.service');
+
+async function getMe(req, res, next) {
+  try {
+    const result = await partnerPortalService.getPartnerMe({
+      partnerUid: req.partnerUser.uid,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function createOrg(req, res, next) {
+  try {
+    const { orgName, orgId } = req.body || {};
+
+    const result = await partnerPortalService.createOrg({
+      partnerUid: req.partnerUser.uid,
+      orgName,
+      requestedOrgId: orgId || null,
+    });
+
+    res.status(HTTP_STATUS.CREATED).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function joinOrg(req, res, next) {
+  try {
+    const { orgId, inviteCode } = req.body || {};
+
+    const result = await partnerPortalService.joinOrg({
+      partnerUid: req.partnerUser.uid,
+      orgId,
+      inviteCode,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function rotateInviteCode(req, res, next) {
+  try {
+    const { orgId } = req.params;
+
+    const result = await partnerPortalService.rotateOrgInviteCode({
+      partnerUid: req.partnerUser.uid,
+      orgId,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = {
+  getMe,
+  createOrg,
+  joinOrg,
+  rotateInviteCode,
+};

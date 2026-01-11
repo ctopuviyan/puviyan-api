@@ -43,6 +43,11 @@ fi
 
 echo "✅ Environment files verified"
 
+# Load environment variables from env file
+set -a
+source "$ENV_FILE"
+set +a
+
 # Install dependencies
 echo "📦 Installing dependencies..."
 npm ci --production
@@ -63,7 +68,7 @@ if command -v gcloud &> /dev/null; then
     --platform managed \
     --region asia-south1 \
     --project $PROJECT_ID \
-    --set-env-vars NODE_ENV=$ENVIRONMENT \
+    --set-env-vars NODE_ENV=$ENVIRONMENT,FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID,PARTNER_FIREBASE_PROJECT_ID=$PARTNER_FIREBASE_PROJECT_ID,ORG_INVITE_CODE_SALT=$ORG_INVITE_CODE_SALT \
     --allow-unauthenticated \
     --max-instances 10 \
     --memory 512Mi \
