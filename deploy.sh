@@ -50,7 +50,7 @@ set +a
 
 # Install dependencies
 echo "📦 Installing dependencies..."
-npm ci --production
+npm install --production
 
 # Run tests (optional)
 # echo "🧪 Running tests..."
