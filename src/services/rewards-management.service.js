@@ -22,7 +22,7 @@ async function createReward(rewardData, createdBy) {
   }
 
   // Validate reward type
-  const validTypes = ['coupon', 'percent_off', 'amount_off'];
+  const validTypes = ['coupon', 'percent_off', 'amount_off', 'digital_badge', 'meal_coupon', 'email_approval'];
   if (!validTypes.includes(rewardData.rewardType)) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid rewardType. Must be one of: ${validTypes.join(', ')}`);
   }
@@ -43,6 +43,33 @@ async function createReward(rewardData, createdBy) {
   if (rewardData.rewardType === 'amount_off') {
     if (!rewardData.discountAmount || rewardData.discountAmount <= 0) {
       throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'discountAmount is required for amount_off type');
+    }
+  }
+
+  if (rewardData.rewardType === 'digital_badge') {
+    if (!rewardData.badgeImageUrl) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeImageUrl is required for digital_badge type');
+    }
+    if (!rewardData.badgeName) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeName is required for digital_badge type');
+    }
+  }
+
+  if (rewardData.rewardType === 'meal_coupon') {
+    if (!rewardData.mealType) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'mealType is required for meal_coupon type (e.g., breakfast, lunch, dinner)');
+    }
+    if (!rewardData.totalCoupons || rewardData.totalCoupons <= 0) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'totalCoupons is required for meal_coupon type');
+    }
+  }
+
+  if (rewardData.rewardType === 'email_approval') {
+    if (!rewardData.approvalEmail) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'approvalEmail is required for email_approval type');
+    }
+    if (!rewardData.approvalSubject) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'approvalSubject is required for email_approval type');
     }
   }
 
@@ -78,6 +105,23 @@ async function createReward(rewardData, createdBy) {
     minPurchaseAmount: ['percent_off', 'amount_off'].includes(rewardData.rewardType) 
       ? (rewardData.minPurchaseAmount || null) 
       : null,
+    
+    // Digital Badge fields
+    badgeImageUrl: rewardData.rewardType === 'digital_badge' ? rewardData.badgeImageUrl : null,
+    badgeName: rewardData.rewardType === 'digital_badge' ? rewardData.badgeName : null,
+    badgeDescription: rewardData.rewardType === 'digital_badge' ? (rewardData.badgeDescription || null) : null,
+    
+    // Meal Coupon fields
+    mealType: rewardData.rewardType === 'meal_coupon' ? rewardData.mealType : null,
+    availableCoupons: rewardData.rewardType === 'meal_coupon' ? (rewardData.availableCoupons || rewardData.totalCoupons) : (rewardData.rewardType === 'coupon' ? (rewardData.availableCoupons || rewardData.totalCoupons) : null),
+    totalCoupons: ['meal_coupon', 'coupon'].includes(rewardData.rewardType) ? rewardData.totalCoupons : null,
+    restaurantName: rewardData.rewardType === 'meal_coupon' ? (rewardData.restaurantName || null) : null,
+    
+    // Email Approval fields
+    approvalEmail: rewardData.rewardType === 'email_approval' ? rewardData.approvalEmail : null,
+    approvalSubject: rewardData.rewardType === 'email_approval' ? rewardData.approvalSubject : null,
+    approvalTemplate: rewardData.rewardType === 'email_approval' ? (rewardData.approvalTemplate || null) : null,
+    requiresManualApproval: rewardData.rewardType === 'email_approval' ? true : false,
     
     // Limits
     maxPerUser: rewardData.maxPerUser || 1,
