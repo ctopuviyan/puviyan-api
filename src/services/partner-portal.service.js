@@ -450,11 +450,13 @@ async function getPendingOrgLinkRequests(partnerUid) {
 
     for (const requestDoc of requestsSnapshot.docs) {
       const requestData = requestDoc.data();
+      const partnerData = partnerDoc.data();
       console.log(`[getPendingOrgLinkRequests] Request: ${requestDoc.id}, orgId: ${requestData.orgId}, status: ${requestData.status}`);
       pendingRequests.push({
         id: requestDoc.id,
         partnerUid: partnerDoc.id,
-        partnerEmail: partnerDoc.data().email || 'Unknown',
+        partnerName: partnerData.name || partnerData.email || 'Unknown',
+        partnerEmail: partnerData.email || 'Unknown',
         ...requestData,
       });
     }
