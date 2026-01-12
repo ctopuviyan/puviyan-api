@@ -402,6 +402,8 @@ async function getOrgLinkRequests({ partnerUid }) {
  * Only partner_admin can access this
  */
 async function getPendingOrgLinkRequests(partnerUid) {
+  const db = getFirestore();
+  
   // Get partner's org
   const partnerDoc = await db.collection('partnerUsers').doc(partnerUid).get();
   if (!partnerDoc.exists) {
@@ -477,6 +479,8 @@ async function getPendingOrgLinkRequests(partnerUid) {
  * Approve an org link request and assign role to partner
  */
 async function approveOrgLinkRequest(adminUid, partnerUid, requestId, assignedRole) {
+  const db = getFirestore();
+  
   // Verify admin
   const adminDoc = await db.collection('partnerUsers').doc(adminUid).get();
   if (!adminDoc.exists) {
@@ -552,6 +556,8 @@ async function approveOrgLinkRequest(adminUid, partnerUid, requestId, assignedRo
  * Reject an org link request
  */
 async function rejectOrgLinkRequest(adminUid, partnerUid, requestId, rejectionReason) {
+  const db = getFirestore();
+  
   // Verify admin
   const adminDoc = await db.collection('partnerUsers').doc(adminUid).get();
   if (!adminDoc.exists) {
