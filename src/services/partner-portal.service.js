@@ -424,8 +424,12 @@ async function getPendingOrgLinkRequests(partnerUid) {
 
   const orgId = partnerData.orgId;
 
+  console.log(`[getPendingOrgLinkRequests] Admin orgId: ${orgId}, Admin UID: ${partnerUid}`);
+
   // Get all partner users
   const allPartnersSnapshot = await db.collection('partnerUsers').get();
+  
+  console.log(`[getPendingOrgLinkRequests] Total partner users: ${allPartnersSnapshot.size}`);
   
   const pendingRequests = [];
 
@@ -438,15 +442,23 @@ async function getPendingOrgLinkRequests(partnerUid) {
       .where('status', '==', 'pending')
       .get();
 
+    if (requestsSnapshot.size > 0) {
+      console.log(`[getPendingOrgLinkRequests] Found ${requestsSnapshot.size} requests from partner ${partnerDoc.id}`);
+    }
+
     for (const requestDoc of requestsSnapshot.docs) {
+      const requestData = requestDoc.data();
+      console.log(`[getPendingOrgLinkRequests] Request: ${requestDoc.id}, orgId: ${requestData.orgId}, status: ${requestData.status}`);
       pendingRequests.push({
         id: requestDoc.id,
         partnerUid: partnerDoc.id,
         partnerEmail: partnerDoc.data().email || 'Unknown',
-        ...requestDoc.data(),
+        ...requestData,
       });
     }
   }
+
+  console.log(`[getPendingOrgLinkRequests] Total pending requests found: ${pendingRequests.length}`);
 
   // Sort by requestedAt descending
   pendingRequests.sort((a, b) => {
