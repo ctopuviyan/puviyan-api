@@ -704,6 +704,46 @@ async function getDashboardMetrics(partnerUid) {
   };
 }
 
+/**
+ * Get users for a specific organization
+ */
+async function getOrgUsers(partnerUid, orgId) {
+  const db = getFirestore();
+  
+  // Verify partner has access to this org
+  const partnerDoc = await db.collection('partnerUsers').doc(partnerUid).get();
+  if (!partnerDoc.exists) {
+    throw new Error('Partner not found');
+  }
+
+  const partnerData = partnerDoc.data();
+  if (partnerData.orgId !== orgId) {
+    throw new Error('Access denied: You do not have access to this organization');
+  }
+
+  // Get all users in this organization
+  const usersSnapshot = await db.collection('users')
+    .where('orgId', '==', orgId)
+    .get();
+
+  const users = [];
+  usersSnapshot.forEach(doc => {
+    const userData = doc.data();
+    users.push({
+      uid: doc.id,
+      email: userData.email || 'Unknown',
+      name: userData.name || userData.displayName || null,
+      role: userData.role || null,
+      roles: userData.roles || [],
+    });
+  });
+
+  return {
+    users,
+    total: users.length,
+  };
+}
+
 module.exports = {
   getPartnerMe,
   createOrg,
@@ -716,4 +756,5 @@ module.exports = {
   approveOrgLinkRequest,
   rejectOrgLinkRequest,
   getDashboardMetrics,
+  getOrgUsers,
 };

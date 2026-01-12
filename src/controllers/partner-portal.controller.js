@@ -205,6 +205,20 @@ async function getDashboardMetrics(req, res, next) {
   }
 }
 
+async function getOrgUsers(req, res, next) {
+  try {
+    const { orgId } = req.params;
+    const result = await partnerPortalService.getOrgUsers(req.partnerUser.uid, orgId);
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMe,
   createOrg,
@@ -217,4 +231,5 @@ module.exports = {
   approveOrgLinkRequest,
   rejectOrgLinkRequest,
   getDashboardMetrics,
+  getOrgUsers,
 };

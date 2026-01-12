@@ -47,6 +47,12 @@ router.post('/orgs', verifyPartnerFirebaseToken, apiLimiter, partnerPortalContro
 router.post('/orgs/join', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.joinOrg);
 
 /**
+ * Get users for a specific organization
+ * Requires: Partner Firebase Auth token
+ */
+router.get('/orgs/:orgId/users', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.getOrgUsers);
+
+/**
  * Rotate (regenerate) an org invite code
  * Requires: Partner Firebase Auth token + partner_admin for that org
  */
