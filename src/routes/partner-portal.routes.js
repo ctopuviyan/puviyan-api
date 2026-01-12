@@ -29,6 +29,12 @@ const upload = multer({
 router.get('/me', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.getMe);
 
 /**
+ * Partner Portal - Get dashboard metrics
+ * Requires: Partner Firebase Auth token
+ */
+router.get('/dashboard/metrics', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.getDashboardMetrics);
+
+/**
  * Create a new organization and bootstrap the requesting partner user
  * Requires: Partner Firebase Auth token
  */

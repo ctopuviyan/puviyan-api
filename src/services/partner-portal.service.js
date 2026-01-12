@@ -616,6 +616,94 @@ async function rejectOrgLinkRequest(adminUid, partnerUid, requestId, rejectionRe
   };
 }
 
+/**
+ * Get dashboard metrics for partner
+ */
+async function getDashboardMetrics(partnerUid) {
+  const db = getFirestore();
+  
+  // Get partner's data
+  const partnerDoc = await db.collection('partnerUsers').doc(partnerUid).get();
+  if (!partnerDoc.exists) {
+    throw new Error('Partner not found');
+  }
+
+  const partnerData = partnerDoc.data();
+  const orgId = partnerData.orgId;
+
+  if (!orgId) {
+    return {
+      organizations: [],
+      rewards: { total: 0, active: 0, inactive: 0 },
+      redemptions: { total: 0, reserved: 0, redeemed: 0 },
+    };
+  }
+
+  // Get organization details
+  const orgDoc = await db.collection('organizations').doc(orgId).get();
+  const orgData = orgDoc.exists ? orgDoc.data() : null;
+
+  // Count employees in this organization
+  const employeesSnapshot = await db.collection('users')
+    .where('orgId', '==', orgId)
+    .get();
+  const employeeCount = employeesSnapshot.size;
+
+  // Get rewards for this organization
+  const rewardsSnapshot = await db.collection('rewards')
+    .where('orgId', '==', orgId)
+    .get();
+  
+  let activeRewards = 0;
+  let inactiveRewards = 0;
+  
+  rewardsSnapshot.forEach(doc => {
+    const reward = doc.data();
+    if (reward.status === 'active') {
+      activeRewards++;
+    } else {
+      inactiveRewards++;
+    }
+  });
+
+  // Get redemptions for this organization
+  const redemptionsSnapshot = await db.collection('redemptions')
+    .where('orgId', '==', orgId)
+    .get();
+  
+  let reservedCount = 0;
+  let redeemedCount = 0;
+  
+  redemptionsSnapshot.forEach(doc => {
+    const redemption = doc.data();
+    if (redemption.status === 'reserved') {
+      reservedCount++;
+    } else if (redemption.status === 'redeemed') {
+      redeemedCount++;
+    }
+  });
+
+  return {
+    organizations: [
+      {
+        id: orgId,
+        name: orgData?.name || 'Unknown',
+        employeeCount,
+      }
+    ],
+    rewards: {
+      total: rewardsSnapshot.size,
+      active: activeRewards,
+      inactive: inactiveRewards,
+    },
+    redemptions: {
+      total: redemptionsSnapshot.size,
+      reserved: reservedCount,
+      redeemed: redeemedCount,
+    },
+  };
+}
+
 module.exports = {
   getPartnerMe,
   createOrg,
@@ -627,4 +715,5 @@ module.exports = {
   getPendingOrgLinkRequests,
   approveOrgLinkRequest,
   rejectOrgLinkRequest,
+  getDashboardMetrics,
 };
