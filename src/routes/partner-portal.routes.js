@@ -107,4 +107,37 @@ router.get(
   partnerPortalController.getOrgLinkRequests
 );
 
+/**
+ * Get pending org link requests for admin's organization
+ * Requires: Partner Firebase Auth token (partner_admin role)
+ */
+router.get(
+  '/admin/pending-requests',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  partnerPortalController.getPendingOrgLinkRequests
+);
+
+/**
+ * Approve an org link request
+ * Requires: Partner Firebase Auth token (partner_admin role)
+ */
+router.post(
+  '/admin/approve-request',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  partnerPortalController.approveOrgLinkRequest
+);
+
+/**
+ * Reject an org link request
+ * Requires: Partner Firebase Auth token (partner_admin role)
+ */
+router.post(
+  '/admin/reject-request',
+  verifyPartnerFirebaseToken,
+  apiLimiter,
+  partnerPortalController.rejectOrgLinkRequest
+);
+
 module.exports = router;

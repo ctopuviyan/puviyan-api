@@ -125,6 +125,73 @@ async function getOrgLinkRequests(req, res, next) {
   }
 }
 
+async function getPendingOrgLinkRequests(req, res, next) {
+  try {
+    const result = await partnerPortalService.getPendingOrgLinkRequests(req.partnerUser.uid);
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function approveOrgLinkRequest(req, res, next) {
+  try {
+    const { partnerUid, requestId, role } = req.body;
+
+    if (!partnerUid || !requestId || !role) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: 'partnerUid, requestId, and role are required',
+      });
+    }
+
+    const result = await partnerPortalService.approveOrgLinkRequest(
+      req.partnerUser.uid,
+      partnerUid,
+      requestId,
+      role
+    );
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function rejectOrgLinkRequest(req, res, next) {
+  try {
+    const { partnerUid, requestId, reason } = req.body;
+
+    if (!partnerUid || !requestId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({
+        success: false,
+        error: 'partnerUid and requestId are required',
+      });
+    }
+
+    const result = await partnerPortalService.rejectOrgLinkRequest(
+      req.partnerUser.uid,
+      partnerUid,
+      requestId,
+      reason
+    );
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getMe,
   createOrg,
@@ -133,4 +200,7 @@ module.exports = {
   listAvailableOrganizations,
   requestOrgLink,
   getOrgLinkRequests,
+  getPendingOrgLinkRequests,
+  approveOrgLinkRequest,
+  rejectOrgLinkRequest,
 };

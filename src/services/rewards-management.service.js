@@ -103,7 +103,7 @@ async function createReward(rewardData, createdBy) {
     
     // Common discount fields
     minPurchaseAmount: ['percent_off', 'amount_off'].includes(rewardData.rewardType) 
-      ? (rewardData.minPurchaseAmount || null) 
+      ? (rewardData.minPurchaseAmount || null)
       : null,
     
     // Digital Badge fields

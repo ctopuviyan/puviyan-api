@@ -395,6 +395,192 @@ async function getOrgLinkRequests({ partnerUid }) {
   };
 }
 
+/**
+ * Get all pending org link requests for the admin's organization
+ * Only partner_admin can access this
+ */
+async function getPendingOrgLinkRequests(partnerUid) {
+  // Get partner's org
+  const partnerDoc = await db.collection('partnerUsers').doc(partnerUid).get();
+  if (!partnerDoc.exists) {
+    throw new Error('Partner not found');
+  }
+
+  const partnerData = partnerDoc.data();
+  if (!partnerData.orgId) {
+    throw new Error('Partner not linked to any organization');
+  }
+
+  if (partnerData.role !== 'partner_admin') {
+    throw new Error('Only partner admins can view pending requests');
+  }
+
+  const orgId = partnerData.orgId;
+
+  // Get all partner users
+  const allPartnersSnapshot = await db.collection('partnerUsers').get();
+  
+  const pendingRequests = [];
+
+  // Check each partner's orgLinkRequests subcollection
+  for (const partnerDoc of allPartnersSnapshot.docs) {
+    const requestsSnapshot = await db.collection('partnerUsers')
+      .doc(partnerDoc.id)
+      .collection('orgLinkRequests')
+      .where('orgId', '==', orgId)
+      .where('status', '==', 'pending')
+      .get();
+
+    for (const requestDoc of requestsSnapshot.docs) {
+      pendingRequests.push({
+        id: requestDoc.id,
+        partnerUid: partnerDoc.id,
+        partnerEmail: partnerDoc.data().email || 'Unknown',
+        ...requestDoc.data(),
+      });
+    }
+  }
+
+  // Sort by requestedAt descending
+  pendingRequests.sort((a, b) => {
+    const aTime = a.requestedAt?.toMillis?.() || 0;
+    const bTime = b.requestedAt?.toMillis?.() || 0;
+    return bTime - aTime;
+  });
+
+  return {
+    requests: pendingRequests,
+    total: pendingRequests.length,
+  };
+}
+
+/**
+ * Approve an org link request and assign role to partner
+ */
+async function approveOrgLinkRequest(adminUid, partnerUid, requestId, assignedRole) {
+  // Verify admin
+  const adminDoc = await db.collection('partnerUsers').doc(adminUid).get();
+  if (!adminDoc.exists) {
+    throw new Error('Admin not found');
+  }
+
+  const adminData = adminDoc.data();
+  if (adminData.role !== 'partner_admin') {
+    throw new Error('Only partner admins can approve requests');
+  }
+
+  if (!adminData.orgId) {
+    throw new Error('Admin not linked to any organization');
+  }
+
+  // Validate assigned role
+  if (!['partner_admin', 'partner_staff'].includes(assignedRole)) {
+    throw new Error('Invalid role. Must be partner_admin or partner_staff');
+  }
+
+  // Get the request
+  const requestRef = db.collection('partnerUsers')
+    .doc(partnerUid)
+    .collection('orgLinkRequests')
+    .doc(requestId);
+
+  const requestDoc = await requestRef.get();
+  if (!requestDoc.exists) {
+    throw new Error('Request not found');
+  }
+
+  const requestData = requestDoc.data();
+
+  // Verify the request is for admin's org
+  if (requestData.orgId !== adminData.orgId) {
+    throw new Error('Cannot approve request for different organization');
+  }
+
+  if (requestData.status !== 'pending') {
+    throw new Error('Request is not pending');
+  }
+
+  // Update request status
+  await requestRef.update({
+    status: 'approved',
+    approvedBy: adminUid,
+    approvedAt: admin.firestore.FieldValue.serverTimestamp(),
+    assignedRole,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  // Update partner user with org and role
+  await db.collection('partnerUsers').doc(partnerUid).update({
+    orgId: requestData.orgId,
+    role: assignedRole,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return {
+    success: true,
+    message: 'Request approved successfully',
+    partnerUid,
+    orgId: requestData.orgId,
+    role: assignedRole,
+  };
+}
+
+/**
+ * Reject an org link request
+ */
+async function rejectOrgLinkRequest(adminUid, partnerUid, requestId, rejectionReason) {
+  // Verify admin
+  const adminDoc = await db.collection('partnerUsers').doc(adminUid).get();
+  if (!adminDoc.exists) {
+    throw new Error('Admin not found');
+  }
+
+  const adminData = adminDoc.data();
+  if (adminData.role !== 'partner_admin') {
+    throw new Error('Only partner admins can reject requests');
+  }
+
+  if (!adminData.orgId) {
+    throw new Error('Admin not linked to any organization');
+  }
+
+  // Get the request
+  const requestRef = db.collection('partnerUsers')
+    .doc(partnerUid)
+    .collection('orgLinkRequests')
+    .doc(requestId);
+
+  const requestDoc = await requestRef.get();
+  if (!requestDoc.exists) {
+    throw new Error('Request not found');
+  }
+
+  const requestData = requestDoc.data();
+
+  // Verify the request is for admin's org
+  if (requestData.orgId !== adminData.orgId) {
+    throw new Error('Cannot reject request for different organization');
+  }
+
+  if (requestData.status !== 'pending') {
+    throw new Error('Request is not pending');
+  }
+
+  // Update request status
+  await requestRef.update({
+    status: 'rejected',
+    rejectedBy: adminUid,
+    rejectedAt: admin.firestore.FieldValue.serverTimestamp(),
+    rejectionReason: rejectionReason || 'No reason provided',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return {
+    success: true,
+    message: 'Request rejected successfully',
+  };
+}
+
 module.exports = {
   getPartnerMe,
   createOrg,
@@ -403,4 +589,7 @@ module.exports = {
   listAvailableOrganizations,
   requestOrgLink,
   getOrgLinkRequests,
+  getPendingOrgLinkRequests,
+  approveOrgLinkRequest,
+  rejectOrgLinkRequest,
 };
