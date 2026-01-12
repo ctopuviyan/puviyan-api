@@ -67,9 +67,11 @@ async function getPartnerMe({ partnerUid }) {
       uid: partnerUid,
       orgId,
       roles: partnerUser.roles || [],
+      role: partnerUser.role, // Add single role field for easier checking
       scope,
       status: partnerUser.status || 'active',
     },
+    role: partnerUser.role, // Add at top level too for convenience
     org,
     allowedDepartments,
   };
@@ -411,7 +413,12 @@ async function getPendingOrgLinkRequests(partnerUid) {
     throw new Error('Partner not linked to any organization');
   }
 
-  if (partnerData.role !== 'partner_admin') {
+  // Check if partner has partner_admin role (can be in roles array or role field)
+  const roles = partnerData.roles || [];
+  const role = partnerData.role;
+  const isAdmin = roles.includes('partner_admin') || role === 'partner_admin';
+  
+  if (!isAdmin) {
     throw new Error('Only partner admins can view pending requests');
   }
 
@@ -465,7 +472,11 @@ async function approveOrgLinkRequest(adminUid, partnerUid, requestId, assignedRo
   }
 
   const adminData = adminDoc.data();
-  if (adminData.role !== 'partner_admin') {
+  const roles = adminData.roles || [];
+  const role = adminData.role;
+  const isAdmin = roles.includes('partner_admin') || role === 'partner_admin';
+  
+  if (!isAdmin) {
     throw new Error('Only partner admins can approve requests');
   }
 
@@ -536,7 +547,11 @@ async function rejectOrgLinkRequest(adminUid, partnerUid, requestId, rejectionRe
   }
 
   const adminData = adminDoc.data();
-  if (adminData.role !== 'partner_admin') {
+  const roles = adminData.roles || [];
+  const role = adminData.role;
+  const isAdmin = roles.includes('partner_admin') || role === 'partner_admin';
+  
+  if (!isAdmin) {
     throw new Error('Only partner admins can reject requests');
   }
 
