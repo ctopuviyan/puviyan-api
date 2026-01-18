@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const signupController = require('../controllers/signup.controller');
-const { authenticateToken } = require('../middleware/auth.middleware');
+const { verifyFirebaseToken } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/rbac.middleware');
 
 /**
@@ -19,7 +19,7 @@ router.get('/signup/validate', signupController.validateSignupToken);
  */
 
 // Complete signup (requires auth but no specific role)
-router.post('/signup/complete', authenticateToken, signupController.completeSignup);
+router.post('/signup/complete', verifyFirebaseToken, signupController.completeSignup);
 
 /**
  * Puviyan Admin routes
@@ -27,28 +27,28 @@ router.post('/signup/complete', authenticateToken, signupController.completeSign
 
 // Get all signup requests
 router.get('/admin/signup-requests', 
-  authenticateToken, 
+  verifyFirebaseToken, 
   requireRole(['puviyan_admin']), 
   signupController.getSignupRequests
 );
 
 // Approve signup request
 router.post('/admin/signup-requests/:requestId/approve', 
-  authenticateToken, 
+  verifyFirebaseToken, 
   requireRole(['puviyan_admin']), 
   signupController.approveSignupRequest
 );
 
 // Reject signup request
 router.post('/admin/signup-requests/:requestId/reject', 
-  authenticateToken, 
+  verifyFirebaseToken, 
   requireRole(['puviyan_admin']), 
   signupController.rejectSignupRequest
 );
 
 // Create Puviyan Admin manually
 router.post('/admin/create-puviyan-admin', 
-  authenticateToken, 
+  verifyFirebaseToken, 
   requireRole(['puviyan_admin']), 
   signupController.createPuviyanAdmin
 );
@@ -59,7 +59,7 @@ router.post('/admin/create-puviyan-admin',
 
 // Generate signup link for org users
 router.post('/org/signup-link', 
-  authenticateToken, 
+  verifyFirebaseToken, 
   requireRole(['org_admin', 'puviyan_admin']), 
   signupController.generateSignupLink
 );
