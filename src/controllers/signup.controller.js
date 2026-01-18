@@ -15,7 +15,7 @@ async function submitSignupRequest(req, res, next) {
       reason,
     });
     
-    res.status(HTTP_STATUS.SUCCESS).json(result);
+    res.status(HTTP_STATUS.CREATED).json(result);
   } catch (error) {
     next(error);
   }
@@ -33,7 +33,7 @@ async function getSignupRequests(req, res, next) {
       limit: limit ? parseInt(limit) : 50,
     });
     
-    res.status(HTTP_STATUS.SUCCESS).json({ requests });
+    res.status(HTTP_STATUS.OK).json({ requests });
   } catch (error) {
     next(error);
   }
@@ -55,7 +55,7 @@ async function approveSignupRequest(req, res, next) {
       approvedBy,
     });
     
-    res.status(HTTP_STATUS.SUCCESS).json(result);
+    res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {
     next(error);
   }
@@ -76,7 +76,7 @@ async function rejectSignupRequest(req, res, next) {
       reason,
     });
     
-    res.status(HTTP_STATUS.SUCCESS).json(result);
+    res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {
     next(error);
   }
@@ -114,7 +114,7 @@ async function generateSignupLink(req, res, next) {
       createdBy,
     });
     
-    res.status(HTTP_STATUS.SUCCESS).json(result);
+    res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {
     next(error);
   }
@@ -133,7 +133,7 @@ async function validateSignupToken(req, res, next) {
     
     const result = await signupService.validateSignupToken({ token });
     
-    res.status(HTTP_STATUS.SUCCESS).json(result);
+    res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {
     next(error);
   }
@@ -154,7 +154,7 @@ async function completeSignup(req, res, next) {
       email,
     });
     
-    res.status(HTTP_STATUS.SUCCESS).json(result);
+    res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {
     next(error);
   }
@@ -173,7 +173,7 @@ async function createPuviyanAdmin(req, res, next) {
       name,
     });
     
-    res.status(HTTP_STATUS.SUCCESS).json(result);
+    res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {
     next(error);
   }
