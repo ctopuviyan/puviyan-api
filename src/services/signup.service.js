@@ -1,7 +1,8 @@
 const { getFirestore, FieldValue } = require('../config/firebase.config');
-const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 const { ApiError } = require('../middleware/error.middleware');
+const { HTTP_STATUS, ERROR_CODES } = require('../config/constants');
 const crypto = require('crypto');
+const emailService = require('./email.service');
 
 /**
  * New Signup System Service
@@ -179,10 +180,22 @@ async function approveSignupRequest({ requestId, orgId, role = 'org_admin', appr
     updatedAt: FieldValue.serverTimestamp(),
   });
 
+  const signupUrl = `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`;
+
+  // Send signup link email
+  const emailResult = await emailService.sendSignupLinkEmail({
+    to: request.email,
+    name: request.name,
+    signupUrl,
+    orgName: orgDoc.data().name,
+  });
+
   return {
     signupLinkId: linkRef.id,
     token,
-    signupUrl: `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`,
+    signupUrl,
+    emailSent: emailResult.success,
+    emailError: emailResult.error,
   };
 }
 
@@ -212,7 +225,18 @@ async function rejectSignupRequest({ requestId, rejectedBy, reason }) {
     updatedAt: FieldValue.serverTimestamp(),
   });
 
-  return { success: true };
+  // Send rejection email
+  const emailResult = await emailService.sendRejectionEmail({
+    to: request.email,
+    name: request.name,
+    reason: reason || '',
+  });
+
+  return { 
+    success: true,
+    emailSent: emailResult.success,
+    emailError: emailResult.error,
+  };
 }
 
 /**
