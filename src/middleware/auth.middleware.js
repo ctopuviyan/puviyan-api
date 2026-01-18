@@ -1,8 +1,9 @@
-const { getAuth } = require('../config/firebase.config');
+const { getAuth, getPartnerAuth } = require('../config/firebase.config');
 const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 
 /**
  * Verify Firebase ID token from Authorization header
+ * Uses Partner Firebase Auth for partner portal tokens
  */
 async function verifyFirebaseToken(req, res, next) {
   try {
@@ -16,7 +17,15 @@ async function verifyFirebaseToken(req, res, next) {
     }
 
     const idToken = authHeader.split('Bearer ')[1];
-    const decodedToken = await getAuth().verifyIdToken(idToken);
+    
+    // Try Partner Auth first (for partner portal users)
+    let decodedToken;
+    try {
+      decodedToken = await getPartnerAuth().verifyIdToken(idToken);
+    } catch (partnerError) {
+      // Fallback to main auth (for other users)
+      decodedToken = await getAuth().verifyIdToken(idToken);
+    }
     
     // Attach user info to request
     req.user = {
@@ -44,7 +53,15 @@ async function optionalAuth(req, res, next) {
     
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const idToken = authHeader.split('Bearer ')[1];
-      const decodedToken = await getAuth().verifyIdToken(idToken);
+      
+      // Try Partner Auth first (for partner portal users)
+      let decodedToken;
+      try {
+        decodedToken = await getPartnerAuth().verifyIdToken(idToken);
+      } catch (partnerError) {
+        // Fallback to main auth (for other users)
+        decodedToken = await getAuth().verifyIdToken(idToken);
+      }
       
       req.user = {
         uid: decodedToken.uid,
