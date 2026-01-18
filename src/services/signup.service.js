@@ -377,6 +377,34 @@ async function createPuviyanAdmin({ uid, email, name }) {
   };
 }
 
+/**
+ * Get all organizations for Puviyan Admin (no filtering)
+ */
+async function getAllOrganizations({ limit = 100 }) {
+  const db = getFirestore();
+  
+  const snapshot = await db.collection('organizations')
+    .where('status', '==', 'active')
+    .limit(limit)
+    .get();
+  
+  const organizations = [];
+  snapshot.forEach(doc => {
+    const data = doc.data();
+    organizations.push({
+      id: doc.id,
+      name: data.name || doc.id,
+      status: data.status,
+      createdAt: data.createdAt?.toDate(),
+    });
+  });
+  
+  // Sort by name
+  organizations.sort((a, b) => a.name.localeCompare(b.name));
+  
+  return organizations;
+}
+
 module.exports = {
   submitSignupRequest,
   getSignupRequests,
@@ -386,4 +414,5 @@ module.exports = {
   validateSignupToken,
   completeSignup,
   createPuviyanAdmin,
+  getAllOrganizations,
 };

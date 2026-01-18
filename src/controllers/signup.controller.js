@@ -179,6 +179,23 @@ async function createPuviyanAdmin(req, res, next) {
   }
 }
 
+/**
+ * Get all organizations (Puviyan Admin only)
+ */
+async function getAllOrganizations(req, res, next) {
+  try {
+    const { limit } = req.query;
+    
+    const organizations = await signupService.getAllOrganizations({
+      limit: limit ? parseInt(limit) : 100,
+    });
+    
+    res.status(HTTP_STATUS.OK).json({ organizations });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   submitSignupRequest,
   getSignupRequests,
@@ -188,4 +205,5 @@ module.exports = {
   validateSignupToken,
   completeSignup,
   createPuviyanAdmin,
+  getAllOrganizations,
 };

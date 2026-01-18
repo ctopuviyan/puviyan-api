@@ -32,6 +32,13 @@ router.get('/admin/signup-requests',
   signupController.getSignupRequests
 );
 
+// Get all organizations
+router.get('/admin/organizations', 
+  verifyFirebaseToken, 
+  requireRole(['puviyan_admin']), 
+  signupController.getAllOrganizations
+);
+
 // Approve signup request
 router.post('/admin/signup-requests/:requestId/approve', 
   verifyFirebaseToken, 
