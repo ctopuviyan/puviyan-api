@@ -469,6 +469,69 @@ async function getAllOrganizations({ limit = 100 }) {
 }
 
 /**
+ * Get all organizations (Puviyan Admin only)
+ */
+async function getAllOrganizations() {
+  const db = getFirestore();
+  
+  const orgsSnapshot = await db.collection('organizations')
+    .where('status', '==', 'active')
+    .get();
+  
+  const organizations = [];
+  orgsSnapshot.forEach(doc => {
+    organizations.push({
+      id: doc.id,
+      name: doc.data().name,
+      status: doc.data().status,
+      createdAt: doc.data().createdAt?.toDate(),
+    });
+  });
+  
+  return organizations;
+}
+
+/**
+ * Create new organization (Puviyan Admin only)
+ */
+async function createOrganization({ name, orgId, createdBy }) {
+  const db = getFirestore();
+  
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Organization name is required');
+  }
+
+  const orgData = {
+    name: name.trim(),
+    status: 'active',
+    createdAt: FieldValue.serverTimestamp(),
+    createdBy,
+  };
+
+  let newOrgRef;
+  
+  if (orgId) {
+    // Use provided orgId
+    newOrgRef = db.collection('organizations').doc(orgId);
+    const existingOrg = await newOrgRef.get();
+    
+    if (existingOrg.exists) {
+      throw new ApiError(HTTP_STATUS.CONFLICT, ERROR_CODES.VALIDATION_ERROR, 'Organization ID already exists');
+    }
+    
+    await newOrgRef.set(orgData);
+  } else {
+    // Auto-generate orgId
+    newOrgRef = await db.collection('organizations').add(orgData);
+  }
+
+  return {
+    orgId: newOrgRef.id,
+    orgName: name.trim(),
+  };
+}
+
+/**
  * Get signup link by ID (Puviyan Admin only)
  */
 async function getSignupLinkById(linkId) {
@@ -507,5 +570,6 @@ module.exports = {
   completeSignup,
   createPuviyanAdmin,
   getAllOrganizations,
+  createOrganization,
   getSignupLinkById,
 };

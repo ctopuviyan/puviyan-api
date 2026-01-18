@@ -39,6 +39,13 @@ router.get('/admin/organizations',
   signupController.getAllOrganizations
 );
 
+// Create new organization
+router.post('/admin/organizations', 
+  verifyFirebaseToken, 
+  requireRole(['puviyan_admin']), 
+  signupController.createOrganization
+);
+
 // Get signup link by ID
 router.get('/admin/signup-links/:linkId', 
   verifyFirebaseToken, 

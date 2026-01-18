@@ -184,13 +184,28 @@ async function createPuviyanAdmin(req, res, next) {
  */
 async function getAllOrganizations(req, res, next) {
   try {
-    const { limit } = req.query;
-    
-    const organizations = await signupService.getAllOrganizations({
-      limit: limit ? parseInt(limit) : 100,
-    });
+    const organizations = await signupService.getAllOrganizations();
     
     res.status(HTTP_STATUS.OK).json({ organizations });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Create new organization (Puviyan Admin only)
+ */
+async function createOrganization(req, res, next) {
+  try {
+    const { name, orgId } = req.body;
+    
+    const result = await signupService.createOrganization({
+      name,
+      orgId,
+      createdBy: req.user.uid,
+    });
+    
+    res.status(HTTP_STATUS.CREATED).json(result);
   } catch (error) {
     next(error);
   }
@@ -274,6 +289,7 @@ module.exports = {
   completeSignup,
   createPuviyanAdmin,
   getAllOrganizations,
+  createOrganization,
   getSignupLink,
   inviteUser,
 };
