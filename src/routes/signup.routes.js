@@ -78,4 +78,11 @@ router.post('/org/signup-link',
   signupController.generateSignupLink
 );
 
+// Invite user - puviyan_admin can invite to any org, org_admin to their org
+router.post('/invite-user', 
+  verifyFirebaseToken, 
+  requireRole(['org_admin', 'puviyan_admin']), 
+  signupController.inviteUser
+);
+
 module.exports = router;

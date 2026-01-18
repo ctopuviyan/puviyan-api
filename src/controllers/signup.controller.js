@@ -211,6 +211,59 @@ async function getSignupLink(req, res, next) {
   }
 }
 
+/**
+ * Invite user - puviyan_admin can invite to any org, org_admin to their org only
+ */
+async function inviteUser(req, res, next) {
+  try {
+    const { email, name, orgId, role } = req.body;
+    const createdBy = req.user.uid;
+    const userRoles = req.user.roles || [];
+    
+    // Get user's partner user record
+    const { getFirestore } = require('../config/firebase.config');
+    const db = getFirestore();
+    const partnerUserDoc = await db.collection('partnerUsers').doc(createdBy).get();
+    
+    if (!partnerUserDoc.exists) {
+      return res.status(HTTP_STATUS.FORBIDDEN).json({ error: 'User not found' });
+    }
+    
+    const partnerUser = partnerUserDoc.data();
+    let targetOrgId = orgId;
+    
+    // If org_admin, they can only invite to their own org
+    if (userRoles.includes('org_admin') && !userRoles.includes('puviyan_admin')) {
+      if (!partnerUser.orgId) {
+        return res.status(HTTP_STATUS.FORBIDDEN).json({ error: 'User not associated with an organization' });
+      }
+      targetOrgId = partnerUser.orgId;
+      
+      // If they provided an orgId, verify it matches their org
+      if (orgId && orgId !== targetOrgId) {
+        return res.status(HTTP_STATUS.FORBIDDEN).json({ error: 'You can only invite users to your own organization' });
+      }
+    }
+    
+    // puviyan_admin must provide an orgId
+    if (userRoles.includes('puviyan_admin') && !targetOrgId) {
+      return res.status(HTTP_STATUS.BAD_REQUEST).json({ error: 'Organization ID is required' });
+    }
+    
+    const result = await signupService.generateSignupLink({
+      email,
+      name,
+      orgId: targetOrgId,
+      role,
+      createdBy,
+    });
+    
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   submitSignupRequest,
   getSignupRequests,
@@ -222,4 +275,5 @@ module.exports = {
   createPuviyanAdmin,
   getAllOrganizations,
   getSignupLink,
+  inviteUser,
 };

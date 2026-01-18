@@ -289,10 +289,22 @@ async function generateSignupLink({ email, name, orgId, role, createdBy }) {
 
   const linkRef = await db.collection('signupLinks').add(signupLinkData);
 
+  const signupUrl = `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`;
+
+  // Send signup link email
+  const emailResult = await emailService.sendSignupLinkEmail({
+    to: email,
+    name: name || email,
+    signupUrl,
+    orgName: orgDoc.data().name,
+  });
+
   return {
     signupLinkId: linkRef.id,
     token,
-    signupUrl: `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`,
+    signupUrl,
+    emailSent: emailResult.success,
+    emailError: emailResult.error,
   };
 }
 
