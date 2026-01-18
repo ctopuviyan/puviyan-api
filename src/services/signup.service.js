@@ -155,7 +155,10 @@ async function approveSignupRequest({ requestId, orgId, role = 'org_admin', appr
   const token = generateSignupToken();
   const tokenHash = hashToken(token);
 
-  // Create signup link record
+  // Create signup link record with 7-day expiration
+  const expirationDate = new Date();
+  expirationDate.setDate(expirationDate.getDate() + 7); // 7 days from now
+  
   const signupLinkData = {
     email: request.email,
     name: request.name,
@@ -166,7 +169,7 @@ async function approveSignupRequest({ requestId, orgId, role = 'org_admin', appr
     used: false,
     createdBy: approvedBy,
     createdAt: FieldValue.serverTimestamp(),
-    expiresAt: FieldValue.serverTimestamp(), // TODO: Add expiration logic
+    expiresAt: expirationDate,
   };
 
   const linkRef = await db.collection('signupLinks').add(signupLinkData);
@@ -186,12 +189,13 @@ async function approveSignupRequest({ requestId, orgId, role = 'org_admin', appr
     updatedAt: FieldValue.serverTimestamp(),
   });
 
-  // Send signup link email
+  // Send signup link email (isDirectInvite: false for approved requests)
   const emailResult = await emailService.sendSignupLinkEmail({
     to: request.email,
     name: request.name,
     signupUrl,
     orgName: orgDoc.data().name,
+    isDirectInvite: false,
   });
 
   return {
@@ -492,6 +496,22 @@ async function getAllOrganizations() {
 }
 
 /**
+ * Generate smart org ID: first 5 letters of org name + 4 digit unique ID
+ */
+function generateSmartOrgId(orgName) {
+  // Get first 5 letters (alphanumeric only)
+  const prefix = orgName
+    .replace(/[^a-zA-Z0-9]/g, '') // Remove non-alphanumeric
+    .substring(0, 5)
+    .toUpperCase();
+  
+  // Generate 4 digit random number
+  const suffix = Math.floor(1000 + Math.random() * 9000);
+  
+  return `${prefix}${suffix}`;
+}
+
+/**
  * Create new organization (Puviyan Admin only)
  */
 async function createOrganization({ name, orgId, createdBy }) {
@@ -509,6 +529,7 @@ async function createOrganization({ name, orgId, createdBy }) {
   };
 
   let newOrgRef;
+  let finalOrgId;
   
   if (orgId) {
     // Use provided orgId
@@ -520,13 +541,32 @@ async function createOrganization({ name, orgId, createdBy }) {
     }
     
     await newOrgRef.set(orgData);
+    finalOrgId = orgId;
   } else {
-    // Auto-generate orgId
-    newOrgRef = await db.collection('organizations').add(orgData);
+    // Auto-generate smart orgId with pattern: first5Letters+4digitUniqueId
+    let attempts = 0;
+    const maxAttempts = 10;
+    
+    while (attempts < maxAttempts) {
+      finalOrgId = generateSmartOrgId(name.trim());
+      newOrgRef = db.collection('organizations').doc(finalOrgId);
+      const existingOrg = await newOrgRef.get();
+      
+      if (!existingOrg.exists) {
+        await newOrgRef.set(orgData);
+        break;
+      }
+      
+      attempts++;
+    }
+    
+    if (attempts >= maxAttempts) {
+      throw new ApiError(HTTP_STATUS.INTERNAL_ERROR, ERROR_CODES.SYS_DATABASE_ERROR, 'Failed to generate unique organization ID');
+    }
   }
 
   return {
-    orgId: newOrgRef.id,
+    orgId: finalOrgId,
     orgName: name.trim(),
   };
 }

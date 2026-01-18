@@ -26,8 +26,9 @@ function createTransporter() {
 
 /**
  * Send signup link email
+ * @param {boolean} isDirectInvite - true for direct admin invites, false for approved signup requests
  */
-async function sendSignupLinkEmail({ to, name, signupUrl, orgName }) {
+async function sendSignupLinkEmail({ to, name, signupUrl, orgName, isDirectInvite = true }) {
   try {
     const transporter = createTransporter();
 
@@ -42,11 +43,11 @@ async function sendSignupLinkEmail({ to, name, signupUrl, orgName }) {
           <style>
             body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
             .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background-color: #4F46E5; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
+            .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }
             .content { background-color: #f9fafb; padding: 30px; border-radius: 0 0 8px 8px; }
-            .button { display: inline-block; background-color: #4F46E5; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
+            .button { display: inline-block; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; font-weight: 600; }
             .footer { text-align: center; margin-top: 30px; color: #6b7280; font-size: 14px; }
-            .info-box { background-color: #e0e7ff; padding: 15px; border-radius: 6px; margin: 20px 0; }
+            .info-box { background-color: #d1fae5; border-left: 4px solid #10b981; padding: 15px; border-radius: 6px; margin: 20px 0; }
           </style>
         </head>
         <body>
@@ -57,7 +58,7 @@ async function sendSignupLinkEmail({ to, name, signupUrl, orgName }) {
             <div class="content">
               <p>Hi ${name},</p>
               
-              <p>Great news! Your signup request has been approved. You've been invited to join <strong>${orgName}</strong> on the Puviyan Partner Portal.</p>
+              <p>${isDirectInvite ? `You've been invited to join <strong>${orgName}</strong> on the Puviyan Partner Portal.` : `Great news! Your signup request has been approved. You've been invited to join <strong>${orgName}</strong> on the Puviyan Partner Portal.`}</p>
               
               <div class="info-box">
                 <p><strong>What's next?</strong></p>
@@ -70,7 +71,7 @@ async function sendSignupLinkEmail({ to, name, signupUrl, orgName }) {
               
               <p style="margin-top: 30px; font-size: 14px; color: #6b7280;">
                 Or copy and paste this link into your browser:<br>
-                <a href="${signupUrl}" style="color: #4F46E5; word-break: break-all;">${signupUrl}</a>
+                <a href="${signupUrl}" style="color: #10b981; word-break: break-all;">${signupUrl}</a>
               </p>
               
               <p style="margin-top: 30px;">
@@ -92,7 +93,7 @@ async function sendSignupLinkEmail({ to, name, signupUrl, orgName }) {
       text: `
 Hi ${name},
 
-Great news! Your signup request has been approved. You've been invited to join ${orgName} on the Puviyan Partner Portal.
+${isDirectInvite ? `You've been invited to join ${orgName} on the Puviyan Partner Portal.` : `Great news! Your signup request has been approved. You've been invited to join ${orgName} on the Puviyan Partner Portal.`}
 
 Complete your signup by clicking this link:
 ${signupUrl}
