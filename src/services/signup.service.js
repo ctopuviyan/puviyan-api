@@ -273,7 +273,10 @@ async function generateSignupLink({ email, name, orgId, role, createdBy }) {
   const token = generateSignupToken();
   const tokenHash = hashToken(token);
 
-  // Create signup link record
+  // Create signup link record with 7-day expiration
+  const expirationDate = new Date();
+  expirationDate.setDate(expirationDate.getDate() + 7); // 7 days from now
+  
   const signupLinkData = {
     email,
     name: name || '',
@@ -284,7 +287,7 @@ async function generateSignupLink({ email, name, orgId, role, createdBy }) {
     used: false,
     createdBy,
     createdAt: FieldValue.serverTimestamp(),
-    expiresAt: FieldValue.serverTimestamp(), // TODO: Add expiration logic
+    expiresAt: expirationDate,
   };
 
   const linkRef = await db.collection('signupLinks').add(signupLinkData);
@@ -332,7 +335,13 @@ async function validateSignupToken({ token }) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This signup link has already been used');
   }
 
-  // TODO: Check expiration
+  // Check expiration
+  if (linkData.expiresAt) {
+    const expirationDate = linkData.expiresAt.toDate ? linkData.expiresAt.toDate() : new Date(linkData.expiresAt);
+    if (expirationDate < new Date()) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This signup link has expired');
+    }
+  }
 
   return {
     id: linkDoc.id,
