@@ -171,16 +171,20 @@ async function approveSignupRequest({ requestId, orgId, role = 'org_admin', appr
 
   const linkRef = await db.collection('signupLinks').add(signupLinkData);
 
+  const signupUrl = `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`;
+
   // Update request status
   await db.collection('signupRequests').doc(requestId).update({
     status: 'approved',
     approvedBy,
     approvedAt: FieldValue.serverTimestamp(),
     signupLinkId: linkRef.id,
+    signupUrl, // Store the URL for easy retrieval
+    assignedOrgId: orgId,
+    assignedOrgName: orgDoc.data().name,
+    assignedRole: role,
     updatedAt: FieldValue.serverTimestamp(),
   });
-
-  const signupUrl = `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`;
 
   // Send signup link email
   const emailResult = await emailService.sendSignupLinkEmail({
