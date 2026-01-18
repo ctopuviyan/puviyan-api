@@ -443,6 +443,35 @@ async function getAllOrganizations({ limit = 100 }) {
   return organizations;
 }
 
+/**
+ * Get signup link by ID (Puviyan Admin only)
+ */
+async function getSignupLinkById(linkId) {
+  const db = getFirestore();
+  
+  const linkDoc = await db.collection('signupLinks').doc(linkId).get();
+  
+  if (!linkDoc.exists) {
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RESOURCE_NOT_FOUND, 'Signup link not found');
+  }
+  
+  const data = linkDoc.data();
+  
+  return {
+    id: linkDoc.id,
+    email: data.email,
+    name: data.name,
+    orgId: data.orgId,
+    orgName: data.orgName,
+    role: data.role,
+    used: data.used,
+    usedAt: data.usedAt?.toDate(),
+    usedBy: data.usedBy,
+    createdAt: data.createdAt?.toDate(),
+    createdBy: data.createdBy,
+  };
+}
+
 module.exports = {
   submitSignupRequest,
   getSignupRequests,
@@ -453,4 +482,5 @@ module.exports = {
   completeSignup,
   createPuviyanAdmin,
   getAllOrganizations,
+  getSignupLinkById,
 };

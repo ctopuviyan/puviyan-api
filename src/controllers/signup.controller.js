@@ -196,6 +196,21 @@ async function getAllOrganizations(req, res, next) {
   }
 }
 
+/**
+ * Get signup link details by ID (Puviyan Admin only)
+ */
+async function getSignupLink(req, res, next) {
+  try {
+    const { linkId } = req.params;
+    
+    const link = await signupService.getSignupLinkById(linkId);
+    
+    res.status(HTTP_STATUS.OK).json(link);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   submitSignupRequest,
   getSignupRequests,
@@ -206,4 +221,5 @@ module.exports = {
   completeSignup,
   createPuviyanAdmin,
   getAllOrganizations,
+  getSignupLink,
 };
