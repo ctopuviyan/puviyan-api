@@ -82,9 +82,9 @@ async function getSignupRequests({ status, limit = 50 }) {
     query = query.where('status', '==', status);
   }
   
-  query = query.orderBy('createdAt', 'desc').limit(limit);
-  
-  const snapshot = await query.get();
+  // Note: If using status filter with orderBy, you need a composite index
+  // For now, we'll fetch all and sort in memory to avoid index requirement
+  const snapshot = await query.limit(limit * 2).get();
   
   const requests = [];
   snapshot.forEach(doc => {
@@ -97,7 +97,14 @@ async function getSignupRequests({ status, limit = 50 }) {
     });
   });
   
-  return requests;
+  // Sort by createdAt in memory
+  requests.sort((a, b) => {
+    const timeA = a.createdAt?.getTime() || 0;
+    const timeB = b.createdAt?.getTime() || 0;
+    return timeB - timeA; // desc order
+  });
+  
+  return requests.slice(0, limit);
 }
 
 /**
