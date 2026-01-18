@@ -39,14 +39,28 @@ async function submitSignupRequest({ email, name, organizationName, reason }) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Email, name, and organization name are required');
   }
 
-  // Check if request already exists
+  // Check if user already exists in the system
+  const existingUsers = await db.collection('partnerUsers')
+    .where('email', '==', email)
+    .get();
+
+  if (!existingUsers.empty) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'An account already exists for this email. Please sign in instead.');
+  }
+
+  // Check if there's already a pending or approved request
   const existingRequests = await db.collection('signupRequests')
     .where('email', '==', email)
-    .where('status', '==', 'pending')
+    .where('status', 'in', ['pending', 'approved'])
     .get();
 
   if (!existingRequests.empty) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'A pending signup request already exists for this email');
+    const request = existingRequests.docs[0].data();
+    if (request.status === 'pending') {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'A pending signup request already exists for this email. Please wait for admin approval.');
+    } else if (request.status === 'approved') {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Your signup request has been approved. Please check your email for the signup link.');
+    }
   }
 
   // Create signup request
