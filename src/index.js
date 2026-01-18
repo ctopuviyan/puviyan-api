@@ -26,6 +26,7 @@ const partnerPortalRoutes = require('./routes/partner-portal.routes');
 const pointsRoutes = require('./routes/points.routes');
 const adminRoutes = require('./routes/admin.routes');
 const uploadRoutes = require('./routes/upload.routes');
+const signupRoutes = require('./routes/signup.routes');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -77,6 +78,7 @@ app.use(`/api/${API_VERSION}/partner`, partnerPortalRoutes);
 app.use(`/api/${API_VERSION}/points`, pointsRoutes);
 app.use(`/api/${API_VERSION}/admin`, adminRoutes);
 app.use(`/api/${API_VERSION}/upload`, uploadRoutes);
+app.use(`/api/${API_VERSION}`, signupRoutes);
 
 // 404 handler
 app.use((req, res) => {
