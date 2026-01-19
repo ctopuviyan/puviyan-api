@@ -121,7 +121,10 @@ async function uploadEmployeeCSV({ partnerUid, orgId, csvContent }) {
   }
 
   const partnerUser = partnerUserDoc.data();
-  if (partnerUser.orgId !== orgId) {
+  const isPuviyanAdmin = partnerUser.roles && partnerUser.roles.includes('puviyan_admin');
+  
+  // puviyan_admin can access any org, others must match their orgId
+  if (!isPuviyanAdmin && partnerUser.orgId !== orgId) {
     throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Access denied to this organization');
   }
 
@@ -223,7 +226,10 @@ async function getEmployees({ partnerUid, orgId, limit = 100, offset = 0 }) {
   }
 
   const partnerUser = partnerUserDoc.data();
-  if (partnerUser.orgId !== orgId) {
+  const isPuviyanAdmin = partnerUser.roles && partnerUser.roles.includes('puviyan_admin');
+  
+  // puviyan_admin can access any org, others must match their orgId
+  if (!isPuviyanAdmin && partnerUser.orgId !== orgId) {
     throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Access denied to this organization');
   }
 
