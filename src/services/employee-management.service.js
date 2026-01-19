@@ -141,6 +141,12 @@ async function uploadEmployeeCSV({ partnerUid, orgId, csvContent }) {
   // Parse CSV
   const rows = parseEmployeeCSV(csvContent);
   
+  console.log('CSV parsing result:', {
+    rowCount: rows?.length || 0,
+    firstRow: rows?.[0] || null,
+    csvPreview: csvContent.substring(0, 200)
+  });
+  
   if (!rows || rows.length === 0) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_INVALID_VALUE, 'CSV file is empty or invalid');
   }
@@ -150,7 +156,8 @@ async function uploadEmployeeCSV({ partnerUid, orgId, csvContent }) {
   
   const employeesCollection = db.collection('organizations').doc(orgId).collection('employees');
   
-  let processed = 0;
+  let newEmployees = 0;
+  let updatedEmployees = 0;
   let skipped = 0;
   const errors = [];
 
@@ -189,13 +196,13 @@ async function uploadEmployeeCSV({ partnerUid, orgId, csvContent }) {
         // Update existing employee
         const docRef = existingQuery.docs[0].ref;
         await docRef.set(employeeData, { merge: true });
+        updatedEmployees++;
       } else {
         // Create new employee with auto-generated ID
         const docRef = employeesCollection.doc();
         await docRef.set(employeeData);
+        newEmployees++;
       }
-
-      processed++;
     } catch (error) {
       skipped++;
       errors.push(`Failed to process ${email}: ${error.message}`);
@@ -207,7 +214,9 @@ async function uploadEmployeeCSV({ partnerUid, orgId, csvContent }) {
 
   return {
     success: true,
-    processed,
+    totalProcessed: newEmployees + updatedEmployees,
+    newEmployees,
+    updatedEmployees,
     skipped,
     total: rows.length,
     epochNumber,
