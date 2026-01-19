@@ -618,6 +618,8 @@ async function rejectOrgLinkRequest(adminUid, partnerUid, requestId, rejectionRe
 
 /**
  * Get dashboard metrics for partner
+ * puviyan_admin: sees all organizations with per-org rewards/redemptions
+ * org_admin: sees only their organization
  */
 async function getDashboardMetrics(partnerUid) {
   const db = getFirestore();
@@ -629,6 +631,69 @@ async function getDashboardMetrics(partnerUid) {
   }
 
   const partnerData = partnerDoc.data();
+  const roles = partnerData.roles || [];
+  const isPuviyanAdmin = roles.includes('puviyan_admin');
+  
+  if (isPuviyanAdmin) {
+    // Puviyan admin sees all organizations
+    const orgsSnapshot = await db.collection('organizations').get();
+    const organizations = [];
+    
+    for (const orgDoc of orgsSnapshot.docs) {
+      const orgId = orgDoc.id;
+      const orgData = orgDoc.data();
+      
+      // Count employees
+      const employeesSnapshot = await db.collection('users')
+        .where('orgId', '==', orgId)
+        .get();
+      
+      // Get rewards
+      const rewardsSnapshot = await db.collection('rewards')
+        .where('orgId', '==', orgId)
+        .get();
+      
+      let activeRewards = 0;
+      let inactiveRewards = 0;
+      rewardsSnapshot.forEach(doc => {
+        if (doc.data().status === 'active') activeRewards++;
+        else inactiveRewards++;
+      });
+      
+      // Get redemptions
+      const redemptionsSnapshot = await db.collection('redemptions')
+        .where('orgId', '==', orgId)
+        .get();
+      
+      let reservedCount = 0;
+      let redeemedCount = 0;
+      redemptionsSnapshot.forEach(doc => {
+        const status = doc.data().status;
+        if (status === 'reserved') reservedCount++;
+        else if (status === 'redeemed') redeemedCount++;
+      });
+      
+      organizations.push({
+        id: orgId,
+        name: orgData?.name || 'Unknown',
+        employeeCount: employeesSnapshot.size,
+        rewards: {
+          total: rewardsSnapshot.size,
+          active: activeRewards,
+          inactive: inactiveRewards,
+        },
+        redemptions: {
+          total: redemptionsSnapshot.size,
+          reserved: reservedCount,
+          redeemed: redeemedCount,
+        },
+      });
+    }
+    
+    return { organizations };
+  }
+  
+  // Org admin or regular user - show only their organization
   const orgId = partnerData.orgId;
 
   if (!orgId) {

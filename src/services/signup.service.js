@@ -124,18 +124,25 @@ async function getSignupRequests({ status, limit = 50, orgId = null }) {
     query = query.where('status', '==', status);
   }
   
-  // Filter by organization if orgId is provided (for org_admin)
-  if (orgId) {
-    query = query.where('assignedOrgId', '==', orgId);
-  }
-  
-  // Note: If using status filter with orderBy, you need a composite index
-  // For now, we'll fetch all and sort in memory to avoid index requirement
-  const snapshot = await query.limit(limit * 2).get();
+  // Note: We can't use where clause for orgId filtering because Firestore
+  // doesn't support querying for null values with ==
+  // So we fetch all and filter in memory
+  const snapshot = await query.limit(limit * 3).get();
   
   const requests = [];
   snapshot.forEach(doc => {
     const data = doc.data();
+    
+    // Filter by organization if orgId is provided (for org_admin)
+    // org_admin should only see requests where assignedOrgId matches their org
+    if (orgId) {
+      // Skip requests without assignedOrgId (new org requests)
+      // Skip requests with different assignedOrgId
+      if (!data.assignedOrgId || data.assignedOrgId !== orgId) {
+        return;
+      }
+    }
+    
     requests.push({
       id: doc.id,
       ...data,
