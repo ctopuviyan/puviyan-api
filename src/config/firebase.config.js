@@ -135,5 +135,6 @@ module.exports = {
   getAuth,
   getPartnerAuth,
   admin,
-  FieldValue: admin.firestore.FieldValue
+  FieldValue: admin.firestore.FieldValue,
+  Timestamp: admin.firestore.Timestamp
 };
