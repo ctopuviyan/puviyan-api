@@ -109,6 +109,20 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "employees",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        {
+          "fieldPath": "statusInOrg",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "lastSeenEpoch",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []
