@@ -41,13 +41,13 @@ async function submitSignupRequest(req, res, next) {
 async function getSignupRequests(req, res, next) {
   try {
     const { status, limit } = req.query;
-    const userRoles = req.user.roles || [];
+    const userRoles = req.partnerUser?.roles || [];
     const isPuviyanAdmin = userRoles.includes('puviyan_admin');
     
     const requests = await signupService.getSignupRequests({
       status,
       limit: limit ? parseInt(limit) : 50,
-      orgId: isPuviyanAdmin ? null : req.user.orgId, // Filter by org for org_admin
+      orgId: isPuviyanAdmin ? null : req.partnerUser?.orgId, // Filter by org for org_admin
     });
     
     res.status(HTTP_STATUS.OK).json({ requests });
