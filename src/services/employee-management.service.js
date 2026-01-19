@@ -25,21 +25,22 @@ function parseEmployeeCSV(csvContent) {
  * Normalize and validate employee row
  */
 function normalizeEmployeeRow(row) {
-  const email = (row.email || '').trim().toLowerCase();
+  // Handle case-insensitive column names
+  const email = (row.email || row.Email || row.EMAIL || '').trim().toLowerCase();
   
   if (!email || !email.includes('@')) {
     return null; // Skip invalid emails
   }
 
-  const statusInOrg = (row.statusInOrg || row.status || 'active').toLowerCase();
+  const statusInOrg = (row.statusInOrg || row.StatusInOrg || row.status || row.Status || 'active').toLowerCase();
   const validStatuses = ['active', 'inactive', 'left'];
   
   return {
     email,
     statusInOrg: validStatuses.includes(statusInOrg) ? statusInOrg : 'active',
-    firstName: (row.firstName || row.first_name || '').trim(),
-    lastName: (row.lastName || row.last_name || '').trim(),
-    role: (row.role || '').trim(),
+    firstName: (row.firstName || row.FirstName || row.first_name || '').trim(),
+    lastName: (row.lastName || row.LastName || row.last_name || '').trim(),
+    role: (row.role || row.Role || '').trim(),
   };
 }
 
@@ -158,7 +159,8 @@ async function uploadEmployeeCSV({ partnerUid, orgId, csvContent }) {
     
     if (!normalized) {
       skipped++;
-      errors.push(`Invalid email: ${row.email || 'missing'}`);
+      const rowEmail = row.email || row.Email || row.EMAIL || 'missing';
+      errors.push(`Row ${skipped}: Invalid or missing email - "${rowEmail}". Available columns: ${Object.keys(row).join(', ')}`);
       continue;
     }
 
