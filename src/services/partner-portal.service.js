@@ -643,9 +643,11 @@ async function getDashboardMetrics(partnerUid) {
       const orgId = orgDoc.id;
       const orgData = orgDoc.data();
       
-      // Count employees
-      const employeesSnapshot = await db.collection('users')
-        .where('orgId', '==', orgId)
+      // Count employees from the employees subcollection
+      const employeesSnapshot = await db.collection('organizations')
+        .doc(orgId)
+        .collection('employees')
+        .where('statusInOrg', '==', 'active')
         .get();
       
       // Get rewards
@@ -708,9 +710,11 @@ async function getDashboardMetrics(partnerUid) {
   const orgDoc = await db.collection('organizations').doc(orgId).get();
   const orgData = orgDoc.exists ? orgDoc.data() : null;
 
-  // Count employees in this organization
-  const employeesSnapshot = await db.collection('users')
-    .where('orgId', '==', orgId)
+  // Count employees from the employees subcollection
+  const employeesSnapshot = await db.collection('organizations')
+    .doc(orgId)
+    .collection('employees')
+    .where('statusInOrg', '==', 'active')
     .get();
   const employeeCount = employeesSnapshot.size;
 
