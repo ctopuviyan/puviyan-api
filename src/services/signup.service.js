@@ -37,16 +37,19 @@ async function getPublicOrganizations() {
   const db = getFirestore();
   
   const snapshot = await db.collection('organizations')
-    .where('status', '==', 'active')
     .orderBy('name')
     .get();
   
   const organizations = [];
   snapshot.forEach(doc => {
-    organizations.push({
-      id: doc.id,
-      name: doc.data().name,
-    });
+    const data = doc.data();
+    // Only include active organizations or those without a status field
+    if (!data.status || data.status === 'active') {
+      organizations.push({
+        id: doc.id,
+        name: data.name,
+      });
+    }
   });
   
   return organizations;
