@@ -53,6 +53,9 @@ async function sendSignupLinkEmail({ to, name, signupUrl, orgName, isDirectInvit
         <body>
           <div class="container">
             <div class="header">
+              <div style="text-align: center; margin-bottom: 20px;">
+                <img src="https://puviyan-partner-portal-stage-omzkebgc5q-uc.a.run.app/puviyan-logo.svg" alt="Puviyan" style="height: 50px; width: auto;" />
+              </div>
               <h1>Welcome to Puviyan!</h1>
             </div>
             <div class="content">
