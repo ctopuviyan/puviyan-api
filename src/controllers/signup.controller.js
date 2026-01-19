@@ -2,16 +2,29 @@ const signupService = require('../services/signup.service');
 const { HTTP_STATUS } = require('../config/constants');
 
 /**
+ * Get public list of organizations (public endpoint)
+ */
+async function getPublicOrganizations(req, res, next) {
+  try {
+    const organizations = await signupService.getPublicOrganizations();
+    res.status(HTTP_STATUS.OK).json({ organizations });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
  * Submit signup request (public endpoint)
  */
 async function submitSignupRequest(req, res, next) {
   try {
-    const { email, name, organizationName, reason } = req.body;
+    const { email, name, organizationName, existingOrgId, reason } = req.body;
     
     const result = await signupService.submitSignupRequest({
       email,
       name,
       organizationName,
+      existingOrgId,
       reason,
     });
     
@@ -22,15 +35,19 @@ async function submitSignupRequest(req, res, next) {
 }
 
 /**
- * Get all signup requests (Puviyan Admin only)
+ * Get all signup requests (Puviyan Admin and Org Admin)
+ * Org admins only see requests for their organization
  */
 async function getSignupRequests(req, res, next) {
   try {
     const { status, limit } = req.query;
+    const userRoles = req.user.roles || [];
+    const isPuviyanAdmin = userRoles.includes('puviyan_admin');
     
     const requests = await signupService.getSignupRequests({
       status,
       limit: limit ? parseInt(limit) : 50,
+      orgId: isPuviyanAdmin ? null : req.user.orgId, // Filter by org for org_admin
     });
     
     res.status(HTTP_STATUS.OK).json({ requests });
@@ -280,6 +297,7 @@ async function inviteUser(req, res, next) {
 }
 
 module.exports = {
+  getPublicOrganizations,
   submitSignupRequest,
   getSignupRequests,
   approveSignupRequest,

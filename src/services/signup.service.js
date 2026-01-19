@@ -31,9 +31,31 @@ function hashToken(token) {
 }
 
 /**
+ * Get public list of organizations (public endpoint)
+ */
+async function getPublicOrganizations() {
+  const db = getFirestore();
+  
+  const snapshot = await db.collection('organizations')
+    .where('status', '==', 'active')
+    .orderBy('name')
+    .get();
+  
+  const organizations = [];
+  snapshot.forEach(doc => {
+    organizations.push({
+      id: doc.id,
+      name: doc.data().name,
+    });
+  });
+  
+  return organizations;
+}
+
+/**
  * Submit a signup request (public endpoint)
  */
-async function submitSignupRequest({ email, name, organizationName, reason }) {
+async function submitSignupRequest({ email, name, organizationName, existingOrgId, reason }) {
   const db = getFirestore();
   
   if (!email || !name || !organizationName) {
@@ -69,6 +91,7 @@ async function submitSignupRequest({ email, name, organizationName, reason }) {
     email,
     name,
     organizationName,
+    assignedOrgId: existingOrgId || null, // If user selected existing org, store it
     reason: reason || '',
     status: 'pending', // pending, approved, rejected
     createdAt: FieldValue.serverTimestamp(),
@@ -86,15 +109,21 @@ async function submitSignupRequest({ email, name, organizationName, reason }) {
 }
 
 /**
- * Get all signup requests (Puviyan Admin only)
+ * Get all signup requests (Puviyan Admin and Org Admin)
+ * If orgId is provided, only returns requests for that organization
  */
-async function getSignupRequests({ status, limit = 50 }) {
+async function getSignupRequests({ status, limit = 50, orgId = null }) {
   const db = getFirestore();
   
   let query = db.collection('signupRequests');
   
   if (status) {
     query = query.where('status', '==', status);
+  }
+  
+  // Filter by organization if orgId is provided (for org_admin)
+  if (orgId) {
+    query = query.where('assignedOrgId', '==', orgId);
   }
   
   // Note: If using status filter with orderBy, you need a composite index
@@ -601,6 +630,7 @@ async function getSignupLinkById(linkId) {
 }
 
 module.exports = {
+  getPublicOrganizations,
   submitSignupRequest,
   getSignupRequests,
   approveSignupRequest,

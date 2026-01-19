@@ -8,6 +8,9 @@ const { requireRole } = require('../middleware/rbac.middleware');
  * Public routes
  */
 
+// Get public list of organizations (no auth required)
+router.get('/public/organizations', signupController.getPublicOrganizations);
+
 // Submit signup request (no auth required)
 router.post('/signup/request', signupController.submitSignupRequest);
 
@@ -25,45 +28,45 @@ router.post('/signup/complete', verifyFirebaseToken, signupController.completeSi
  * Puviyan Admin routes
  */
 
-// Get all signup requests
+// Get all signup requests (org_admin sees only their org's requests)
 router.get('/admin/signup-requests', 
   verifyFirebaseToken, 
-  requireRole(['puviyan_admin']), 
+  requireRole(['puviyan_admin', 'org_admin']), 
   signupController.getSignupRequests
 );
 
-// Get all organizations
+// Get all organizations (org_admin sees only their org)
 router.get('/admin/organizations', 
   verifyFirebaseToken, 
-  requireRole(['puviyan_admin']), 
+  requireRole(['puviyan_admin', 'org_admin']), 
   signupController.getAllOrganizations
 );
 
-// Create new organization
+// Create new organization (puviyan_admin only)
 router.post('/admin/organizations', 
   verifyFirebaseToken, 
   requireRole(['puviyan_admin']), 
   signupController.createOrganization
 );
 
-// Get signup link by ID
+// Get signup link by ID (org_admin can see their org's links)
 router.get('/admin/signup-links/:linkId', 
   verifyFirebaseToken, 
-  requireRole(['puviyan_admin']), 
+  requireRole(['puviyan_admin', 'org_admin']), 
   signupController.getSignupLink
 );
 
-// Approve signup request
+// Approve signup request (org_admin can approve for their org)
 router.post('/admin/signup-requests/:requestId/approve', 
   verifyFirebaseToken, 
-  requireRole(['puviyan_admin']), 
+  requireRole(['puviyan_admin', 'org_admin']), 
   signupController.approveSignupRequest
 );
 
-// Reject signup request
+// Reject signup request (org_admin can reject for their org)
 router.post('/admin/signup-requests/:requestId/reject', 
   verifyFirebaseToken, 
-  requireRole(['puviyan_admin']), 
+  requireRole(['puviyan_admin', 'org_admin']), 
   signupController.rejectSignupRequest
 );
 
