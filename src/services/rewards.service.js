@@ -368,6 +368,79 @@ async function cancelRedemption({ userId, redemptionId, reason }) {
 }
 
 /**
+ * Redeem reward - Mark redemption as redeemed (for merchants/partners)
+ */
+async function redeemReward({ qrToken, redemptionId, merchantId = null }) {
+  const db = getFirestore();
+
+  // Verify and decode QR token
+  let tokenData;
+  try {
+    tokenData = tokenService.verifyRedemptionToken(qrToken);
+  } catch (error) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Invalid or expired QR token');
+  }
+
+  // Use redemptionId from token if not provided
+  const actualRedemptionId = redemptionId || tokenData.redemptionId;
+  const userId = tokenData.userId;
+
+  // Get redemption
+  const redemptionRef = db.collection('userRedemptions').doc(userId).collection('redemptions').doc(actualRedemptionId);
+  const redemptionDoc = await redemptionRef.get();
+
+  if (!redemptionDoc.exists) {
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.VALIDATION_ERROR, 'Redemption not found');
+  }
+
+  const redemption = redemptionDoc.data();
+
+  // Validate redemption status
+  if (redemption.status === 'redeemed') {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This reward has already been redeemed');
+  }
+
+  if (redemption.status === 'cancelled') {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This redemption has been cancelled');
+  }
+
+  if (redemption.status === 'expired') {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This redemption has expired');
+  }
+
+  // Check if expired
+  const now = new Date();
+  if (redemption.expiresAt && redemption.expiresAt.toDate() < now) {
+    // Mark as expired
+    await redemptionRef.update({
+      status: 'expired',
+      expiredAt: now
+    });
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This redemption has expired');
+  }
+
+  // Update redemption status to redeemed
+  await redemptionRef.update({
+    status: 'redeemed',
+    redeemedAt: now,
+    merchantId: merchantId || null
+  });
+
+  // Actually deduct the points now (they were only reserved before)
+  await pointsService.deductPoints(userId, redemption.pointsDeducted, actualRedemptionId, 'reward_redeemed');
+
+  return {
+    success: true,
+    redemptionId: actualRedemptionId,
+    rewardTitle: redemption.rewardTitle,
+    brandName: redemption.brandName,
+    pointsDeducted: redemption.pointsDeducted,
+    redeemedAt: now.toISOString(),
+    message: 'Reward redeemed successfully'
+  };
+}
+
+/**
  * Generate unique coupon code
  */
 function generateCouponCode(brandName, redemptionId) {
@@ -382,5 +455,6 @@ module.exports = {
   getRewardDetails,
   reserveReward,
   getUserRedemptions,
-  cancelRedemption
+  cancelRedemption,
+  redeemReward
 };

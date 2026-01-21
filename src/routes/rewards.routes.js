@@ -36,4 +36,11 @@ router.get('/my/redemptions', verifyFirebaseToken, apiLimiter, rewardsController
  */
 router.post('/cancel', verifyFirebaseToken, apiLimiter, rewardsController.cancelRedemption);
 
+/**
+ * Redeem reward (mark as redeemed by merchant/partner)
+ * Validates QR token and marks redemption as complete
+ * Note: Auth temporarily disabled for testing - merchants can scan QR
+ */
+router.post('/redeem', redemptionLimiter, rewardsController.redeemReward);
+
 module.exports = router;

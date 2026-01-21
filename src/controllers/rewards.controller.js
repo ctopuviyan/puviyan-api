@@ -106,10 +106,37 @@ async function cancelRedemption(req, res, next) {
   }
 }
 
+/**
+ * Redeem reward (for merchants/partners)
+ */
+async function redeemReward(req, res, next) {
+  try {
+    const { qrToken, redemptionId, merchantId } = req.body;
+
+    if (!qrToken) {
+      return res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: 'qrToken is required'
+      });
+    }
+
+    const result = await rewardsService.redeemReward({
+      qrToken,
+      redemptionId,
+      merchantId
+    });
+
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getAvailableRewards,
   getRewardDetails,
   reserveReward,
   getUserRedemptions,
-  cancelRedemption
+  cancelRedemption,
+  redeemReward
 };
