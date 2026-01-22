@@ -692,7 +692,26 @@ async function getDashboardMetrics(partnerUid) {
       });
     }
     
-    return { organizations };
+    // Get public rewards (orgId = null)
+    const publicRewardsSnapshot = await db.collection('rewards')
+      .where('orgId', '==', null)
+      .get();
+    
+    let publicActiveRewards = 0;
+    let publicInactiveRewards = 0;
+    publicRewardsSnapshot.forEach(doc => {
+      if (doc.data().status === 'active') publicActiveRewards++;
+      else publicInactiveRewards++;
+    });
+    
+    return { 
+      organizations,
+      publicRewards: {
+        total: publicRewardsSnapshot.size,
+        active: publicActiveRewards,
+        inactive: publicInactiveRewards,
+      }
+    };
   }
   
   // Org admin or regular user - show only their organization
@@ -752,6 +771,18 @@ async function getDashboardMetrics(partnerUid) {
     }
   });
 
+  // Get public rewards (orgId = null) for org_admin users
+  const publicRewardsSnapshot = await db.collection('rewards')
+    .where('orgId', '==', null)
+    .get();
+  
+  let publicActiveRewards = 0;
+  let publicInactiveRewards = 0;
+  publicRewardsSnapshot.forEach(doc => {
+    if (doc.data().status === 'active') publicActiveRewards++;
+    else publicInactiveRewards++;
+  });
+
   return {
     organizations: [
       {
@@ -770,6 +801,11 @@ async function getDashboardMetrics(partnerUid) {
       reserved: reservedCount,
       redeemed: redeemedCount,
     },
+    publicRewards: {
+      total: publicRewardsSnapshot.size,
+      active: publicActiveRewards,
+      inactive: publicInactiveRewards,
+    }
   };
 }
 
