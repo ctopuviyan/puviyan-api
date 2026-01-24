@@ -12,17 +12,6 @@ const { ApiError } = require('../middleware/error.middleware');
 async function updateUserProfile(userId, updates) {
   const db = getFirestore();
 
-  // Check if user exists in partner_users collection
-  const partnerUserDoc = await db.collection('partner_users').doc(userId).get();
-  
-  if (!partnerUserDoc.exists) {
-    // Create partner_users document if it doesn't exist
-    await db.collection('partner_users').doc(userId).set({
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-  }
-
   // Update Firebase Auth profile
   try {
     const updateData = {};
@@ -37,8 +26,11 @@ async function updateUserProfile(userId, updates) {
 
     await admin.auth().updateUser(userId, updateData);
 
-    // Also update in Firestore partner_users collection
-    const firestoreUpdates = {};
+    // Update in Firestore partner_users collection using set with merge
+    const firestoreUpdates = {
+      updatedAt: new Date()
+    };
+    
     if (updates.displayName !== undefined) {
       firestoreUpdates.displayName = updates.displayName;
     }
@@ -46,10 +38,8 @@ async function updateUserProfile(userId, updates) {
       firestoreUpdates.photoURL = updates.photoURL;
     }
     
-    if (Object.keys(firestoreUpdates).length > 0) {
-      firestoreUpdates.updatedAt = new Date();
-      await db.collection('partner_users').doc(userId).update(firestoreUpdates);
-    }
+    // Use set with merge to create if doesn't exist, update if exists
+    await db.collection('partner_users').doc(userId).set(firestoreUpdates, { merge: true });
 
     return {
       message: 'Profile updated successfully',
