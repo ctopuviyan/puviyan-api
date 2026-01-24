@@ -59,6 +59,10 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
   const rewards = snapshot.docs
     .map(doc => {
       const data = doc.data();
+      // Use badgeImageUrl as fallback for previewImage if it's empty (for digital_badge type)
+      const previewImage = data.previewImage || (data.rewardType === 'digital_badge' ? data.badgeImageUrl : '') || '';
+      const fullImage = data.fullImage || (data.rewardType === 'digital_badge' ? data.badgeImageUrl : '') || '';
+      
       return {
         rewardId: doc.id,
         rewardTitle: data.rewardTitle,
@@ -70,10 +74,11 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
         maxPerUser: data.maxPerUser,
         validFrom: data.validFrom?.toDate?.()?.toISOString(),
         validTo: data.validTo?.toDate?.()?.toISOString(),
-        previewImage: data.previewImage,
+        previewImage,
         previewImageGreyed: data.previewImageGreyed,
-        fullImage: data.fullImage,
+        fullImage,
         fullImageGreyed: data.fullImageGreyed,
+        badgeImageUrl: data.badgeImageUrl, // Include for digital_badge type
         carbonContribution: data.carbonContribution,
         discountPercent: data.discountPercent,
         discountAmount: data.discountAmount,
