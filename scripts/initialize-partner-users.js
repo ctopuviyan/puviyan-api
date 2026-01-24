@@ -10,7 +10,8 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env.stage') });
 
 // Initialize Firebase Admin
-const serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
+const serviceAccountPath = path.resolve(__dirname, '..', process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
+const serviceAccount = require(serviceAccountPath);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
