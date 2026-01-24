@@ -3,6 +3,7 @@ const router = express.Router();
 const { verifyFirebaseToken } = require('../middleware/auth.middleware');
 const { apiLimiter } = require('../middleware/rateLimit.middleware');
 const adminController = require('../controllers/admin.controller');
+const organizationController = require('../controllers/organization.controller');
 
 // Note: In production, add admin role verification middleware
 
@@ -40,5 +41,17 @@ router.get('/analytics', verifyFirebaseToken, apiLimiter, adminController.getSys
  * Requires: Firebase auth token + admin role
  */
 router.get('/redemptions', verifyFirebaseToken, apiLimiter, adminController.getAllRedemptions);
+
+/**
+ * Get all organizations (admin view)
+ * Requires: Firebase auth token + admin role
+ */
+router.get('/organizations', verifyFirebaseToken, apiLimiter, organizationController.getAllOrganizations);
+
+/**
+ * Create new organization
+ * Requires: Firebase auth token + admin role
+ */
+router.post('/organizations', verifyFirebaseToken, apiLimiter, organizationController.createOrganization);
 
 module.exports = router;
