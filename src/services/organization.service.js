@@ -73,22 +73,39 @@ async function getOrganizationById(orgId) {
  */
 async function getMyOrganization(userId) {
   const db = getFirestore();
+  const admin = require('../config/firebase.config').admin;
 
-  // Get user's org membership
+  // First, try to get organization ID from user's custom claims
+  try {
+    const userRecord = await admin.auth().getUser(userId);
+    const customClaims = userRecord.customClaims || {};
+    
+    // Check if user has orgId in custom claims
+    if (customClaims.orgId) {
+      return getOrganizationById(customClaims.orgId);
+    }
+  } catch (error) {
+    console.error('Error fetching user from Firebase Auth:', error);
+  }
+
+  // Fallback: Try to get user's org membership from informations collection
   const userDoc = await db.collection('informations').doc(userId).get();
   
-  if (!userDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_NOT_FOUND, 'User not found');
+  if (userDoc.exists) {
+    const userData = userDoc.data();
+    const orgId = userData.orgMembership?.orgId;
+
+    if (orgId) {
+      return getOrganizationById(orgId);
+    }
   }
 
-  const userData = userDoc.data();
-  const orgId = userData.orgMembership?.orgId;
-
-  if (!orgId) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.VALIDATION_ERROR, 'User is not part of any organization');
-  }
-
-  return getOrganizationById(orgId);
+  // If still no organization found, return helpful error
+  throw new ApiError(
+    HTTP_STATUS.NOT_FOUND, 
+    ERROR_CODES.VALIDATION_ERROR, 
+    'User is not associated with any organization. Please contact your administrator to set up organization membership.'
+  );
 }
 
 /**
