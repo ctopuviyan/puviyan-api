@@ -17,7 +17,7 @@ async function getAllOrganizations() {
   const organizations = await Promise.all(snapshot.docs.map(async (doc) => {
     const data = doc.data();
     
-    // Get member count
+    // Get member count from consumer app users (informations collection)
     const membersSnapshot = await db.collection('informations')
       .where('orgMembership.orgId', '==', doc.id)
       .count()
@@ -53,7 +53,7 @@ async function getOrganizationById(orgId) {
 
   const data = orgDoc.data();
   
-  // Get member count
+  // Get member count from consumer app users (informations collection)
   const membersSnapshot = await db.collection('informations')
     .where('orgMembership.orgId', '==', orgId)
     .count()
@@ -88,12 +88,12 @@ async function getMyOrganization(userId) {
     console.error('Error fetching user from Firebase Auth:', error);
   }
 
-  // Fallback: Try to get user's org membership from informations collection
-  const userDoc = await db.collection('informations').doc(userId).get();
+  // Try to get user's org membership from partner_users collection (for partner portal users)
+  const partnerUserDoc = await db.collection('partner_users').doc(userId).get();
   
-  if (userDoc.exists) {
-    const userData = userDoc.data();
-    const orgId = userData.orgMembership?.orgId;
+  if (partnerUserDoc.exists) {
+    const userData = partnerUserDoc.data();
+    const orgId = userData.orgId;
 
     if (orgId) {
       return getOrganizationById(orgId);

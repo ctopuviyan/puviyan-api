@@ -12,11 +12,15 @@ const { ApiError } = require('../middleware/error.middleware');
 async function updateUserProfile(userId, updates) {
   const db = getFirestore();
 
-  // Validate user exists
-  const userDoc = await db.collection('informations').doc(userId).get();
+  // Check if user exists in partner_users collection
+  const partnerUserDoc = await db.collection('partner_users').doc(userId).get();
   
-  if (!userDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_NOT_FOUND, 'User not found');
+  if (!partnerUserDoc.exists) {
+    // Create partner_users document if it doesn't exist
+    await db.collection('partner_users').doc(userId).set({
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
   }
 
   // Update Firebase Auth profile
@@ -33,18 +37,18 @@ async function updateUserProfile(userId, updates) {
 
     await admin.auth().updateUser(userId, updateData);
 
-    // Also update in Firestore informations collection
+    // Also update in Firestore partner_users collection
     const firestoreUpdates = {};
     if (updates.displayName !== undefined) {
-      firestoreUpdates.name = updates.displayName;
+      firestoreUpdates.displayName = updates.displayName;
     }
     if (updates.photoURL !== undefined) {
-      firestoreUpdates.profilePicture = updates.photoURL;
+      firestoreUpdates.photoURL = updates.photoURL;
     }
     
     if (Object.keys(firestoreUpdates).length > 0) {
       firestoreUpdates.updatedAt = new Date();
-      await db.collection('informations').doc(userId).update(firestoreUpdates);
+      await db.collection('partner_users').doc(userId).update(firestoreUpdates);
     }
 
     return {
