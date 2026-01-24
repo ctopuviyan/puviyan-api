@@ -59,22 +59,49 @@ function initializePartnerFirebase() {
   try {
     let credential;
 
-    const serviceAccountPath =
+    // Try partner-specific service account first
+    const partnerServiceAccountPath =
       process.env.PARTNER_FIREBASE_SERVICE_ACCOUNT_PATH ||
       process.env.PARTNER_GOOGLE_APPLICATION_CREDENTIALS;
 
-    if (serviceAccountPath) {
+    if (partnerServiceAccountPath) {
       try {
-        const serviceAccount = require(path.resolve(serviceAccountPath));
+        const serviceAccount = require(path.resolve(partnerServiceAccountPath));
         credential = admin.credential.cert(serviceAccount);
         console.log('✅ Using partner service account credentials from file');
       } catch (fileError) {
-        console.log('⚠️ Partner service account file not found, using Application Default Credentials');
-        credential = admin.credential.applicationDefault();
+        console.log('⚠️ Partner service account file not found, trying main service account');
+        // Fall back to main service account
+        const mainServiceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+        if (mainServiceAccountPath) {
+          try {
+            const serviceAccount = require(path.resolve(mainServiceAccountPath));
+            credential = admin.credential.cert(serviceAccount);
+            console.log('✅ Using main service account for partner Firebase (fallback)');
+          } catch (mainFileError) {
+            console.log('⚠️ Main service account also not found, using Application Default Credentials');
+            credential = admin.credential.applicationDefault();
+          }
+        } else {
+          credential = admin.credential.applicationDefault();
+        }
       }
     } else {
-      console.log('✅ Using Application Default Credentials for partner auth');
-      credential = admin.credential.applicationDefault();
+      // No partner service account specified, try main service account
+      const mainServiceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+      if (mainServiceAccountPath) {
+        try {
+          const serviceAccount = require(path.resolve(mainServiceAccountPath));
+          credential = admin.credential.cert(serviceAccount);
+          console.log('✅ Using main service account for partner Firebase');
+        } catch (mainFileError) {
+          console.log('⚠️ Service account file not found, using Application Default Credentials');
+          credential = admin.credential.applicationDefault();
+        }
+      } else {
+        console.log('✅ Using Application Default Credentials for partner auth');
+        credential = admin.credential.applicationDefault();
+      }
     }
 
     const partnerProjectId = process.env.PARTNER_FIREBASE_PROJECT_ID;
