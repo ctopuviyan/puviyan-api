@@ -116,6 +116,7 @@ async function createReward(rewardData, createdBy) {
     availableCoupons: rewardData.rewardType === 'meal_coupon' ? (rewardData.availableCoupons || rewardData.totalCoupons) : (rewardData.rewardType === 'coupon' ? (rewardData.availableCoupons || rewardData.totalCoupons) : null),
     totalCoupons: ['meal_coupon', 'coupon'].includes(rewardData.rewardType) ? rewardData.totalCoupons : null,
     restaurantName: rewardData.rewardType === 'meal_coupon' ? (rewardData.restaurantName || null) : null,
+    redemptionType: rewardData.rewardType === 'meal_coupon' ? (rewardData.redemptionType || 'qr_code') : null,
     
     // Email Approval fields
     approvalEmail: rewardData.rewardType === 'email_approval' ? rewardData.approvalEmail : null,
