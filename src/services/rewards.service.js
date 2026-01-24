@@ -85,6 +85,8 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
         minPurchaseAmount: data.minPurchaseAmount,
         rewardDetails: data.rewardDetails,
         howToClaim: data.howToClaim,
+        termsAndConditions: data.termsAndConditions,
+        redemptionType: data.redemptionType,
         likeCount: data.likeCount || 0,
         dislikeCount: data.dislikeCount || 0,
         usefulnessScore: data.usefulnessScore || 0,
