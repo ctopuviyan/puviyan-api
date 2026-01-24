@@ -1,18 +1,19 @@
-const { getFirestore, admin } = require('../config/firebase.config');
+const { getPartnerFirestore, getPartnerAuth } = require('../config/firebase.config');
 const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 const { ApiError } = require('../middleware/error.middleware');
 
 /**
- * User Profile Service - Update user profile information
+ * User Profile Service - Update user profile information for Partner Portal users
  */
 
 /**
  * Update user profile (display name and photo URL)
  */
 async function updateUserProfile(userId, updates) {
-  const db = getFirestore();
+  const partnerDb = getPartnerFirestore();
+  const partnerAuth = getPartnerAuth();
 
-  // Update Firebase Auth profile
+  // Update Partner Firebase Auth profile
   try {
     const updateData = {};
     
@@ -24,9 +25,9 @@ async function updateUserProfile(userId, updates) {
       updateData.photoURL = updates.photoURL;
     }
 
-    await admin.auth().updateUser(userId, updateData);
+    await partnerAuth.updateUser(userId, updateData);
 
-    // Update in Firestore partner_users collection using set with merge
+    // Update in Partner Firestore partner_users collection using set with merge
     const firestoreUpdates = {
       updatedAt: new Date()
     };
@@ -39,7 +40,7 @@ async function updateUserProfile(userId, updates) {
     }
     
     // Use set with merge to create if doesn't exist, update if exists
-    await db.collection('partner_users').doc(userId).set(firestoreUpdates, { merge: true });
+    await partnerDb.collection('partner_users').doc(userId).set(firestoreUpdates, { merge: true });
 
     return {
       message: 'Profile updated successfully',

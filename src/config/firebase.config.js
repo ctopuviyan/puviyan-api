@@ -99,7 +99,7 @@ function initializePartnerFirebase() {
 }
 
 /**
- * Get Firestore instance
+ * Get Firestore instance (Consumer App)
  */
 function getFirestore() {
   if (!firebaseApp) {
@@ -109,7 +109,17 @@ function getFirestore() {
 }
 
 /**
- * Get Firebase Auth instance
+ * Get Partner Firestore instance (Partner Portal)
+ */
+function getPartnerFirestore() {
+  if (!partnerFirebaseApp) {
+    throw new Error('Partner Firebase not initialized. Call initializePartnerFirebase() first.');
+  }
+  return partnerFirebaseApp.firestore();
+}
+
+/**
+ * Get Firebase Auth instance (Consumer App)
  */
 function getAuth() {
   if (!firebaseApp) {
@@ -119,7 +129,7 @@ function getAuth() {
 }
 
 /**
- * Get Partner Firebase Auth instance
+ * Get Partner Firebase Auth instance (Partner Portal)
  */
 function getPartnerAuth() {
   if (!partnerFirebaseApp) {
@@ -132,6 +142,7 @@ module.exports = {
   initializeFirebase,
   initializePartnerFirebase,
   getFirestore,
+  getPartnerFirestore,
   getAuth,
   getPartnerAuth,
   admin,

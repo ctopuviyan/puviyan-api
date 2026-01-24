@@ -14,7 +14,7 @@ const envFile = process.env.NODE_ENV === 'production'
 
 require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
 
-const { initializeFirebase } = require('./config/firebase.config');
+const { initializeFirebase, initializePartnerFirebase } = require('./config/firebase.config');
 const { errorHandler } = require('./middleware/error.middleware');
 
 // Import routes
@@ -34,8 +34,11 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const API_VERSION = process.env.API_VERSION || 'v1';
 
-// Initialize Firebase Admin SDK
+// Initialize Firebase Admin SDK (for consumer app)
 initializeFirebase();
+
+// Initialize Partner Firebase Admin SDK (for partner portal)
+initializePartnerFirebase();
 
 // Middleware
 // Configure Helmet with relaxed CSP for development/testing UI

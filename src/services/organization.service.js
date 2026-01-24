@@ -72,12 +72,14 @@ async function getOrganizationById(orgId) {
  * Get current user's organization
  */
 async function getMyOrganization(userId) {
-  const db = getFirestore();
-  const admin = require('../config/firebase.config').admin;
+  const db = getFirestore(); // Consumer Firestore for organizations
+  const { getPartnerAuth, getPartnerFirestore } = require('../config/firebase.config');
+  const partnerAuth = getPartnerAuth();
+  const partnerDb = getPartnerFirestore();
 
-  // First, try to get organization ID from user's custom claims
+  // First, try to get organization ID from user's custom claims in Partner Firebase
   try {
-    const userRecord = await admin.auth().getUser(userId);
+    const userRecord = await partnerAuth.getUser(userId);
     const customClaims = userRecord.customClaims || {};
     
     // Check if user has orgId in custom claims
@@ -85,11 +87,11 @@ async function getMyOrganization(userId) {
       return getOrganizationById(customClaims.orgId);
     }
   } catch (error) {
-    console.error('Error fetching user from Firebase Auth:', error);
+    console.error('Error fetching user from Partner Firebase Auth:', error);
   }
 
-  // Try to get user's org membership from partner_users collection (for partner portal users)
-  const partnerUserDoc = await db.collection('partner_users').doc(userId).get();
+  // Try to get user's org membership from partner_users collection in Partner Firestore
+  const partnerUserDoc = await partnerDb.collection('partner_users').doc(userId).get();
   
   if (partnerUserDoc.exists) {
     const userData = partnerUserDoc.data();
