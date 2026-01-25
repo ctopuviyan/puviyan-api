@@ -3,6 +3,7 @@ const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 const { ApiError } = require('../middleware/error.middleware');
 const tokenService = require('./token.service');
 const pointsService = require('./points.service');
+const emailService = require('./email.service');
 const QRCode = require('qrcode');
 const { userOrgCache } = require('../middleware/cache.middleware');
 
@@ -300,6 +301,32 @@ async function reserveReward({ userId, rewardId }) {
       qrCodeUrl
     });
 
+    // Send approval email for email_approval type rewards
+    if (reward.rewardType === 'email_approval' && reward.approvalEmail) {
+      try {
+        // Get user details
+        const userDoc = await db.collection('informations').doc(userId).get();
+        const userData = userDoc.data();
+        const userName = userData?.name || 'User';
+        const orgName = userData?.orgMembership?.orgName || '';
+
+        // Send approval request email
+        await emailService.sendRewardApprovalEmail({
+          to: reward.approvalEmail,
+          userName,
+          rewardTitle: reward.rewardTitle,
+          pointsReserved: reward.deductPoints,
+          redemptionId,
+          orgName
+        });
+
+        console.log(`✅ Approval email sent to ${reward.approvalEmail} for redemption ${redemptionId}`);
+      } catch (emailError) {
+        console.error('❌ Failed to send approval email:', emailError);
+        // Don't fail the redemption if email fails
+      }
+    }
+
     return {
       redemptionId,
       rewardType: reward.rewardType || 'coupon',
@@ -308,7 +335,9 @@ async function reserveReward({ userId, rewardId }) {
       qrCodeUrl,
       pointsDeducted: reward.deductPoints,
       expiresAt: expiresAt.toISOString(),
-      message: 'Reward reserved successfully'
+      message: reward.rewardType === 'email_approval' 
+        ? 'Reward reserved successfully. An approval request has been sent to the approver.'
+        : 'Reward reserved successfully'
     };
 
   } catch (error) {

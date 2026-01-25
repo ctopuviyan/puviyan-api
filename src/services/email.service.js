@@ -207,7 +207,230 @@ The Puviyan Team
   }
 }
 
+/**
+ * Send reward approval request email
+ */
+async function sendRewardApprovalEmail({ 
+  to, 
+  userName, 
+  rewardTitle, 
+  pointsReserved,
+  redemptionId,
+  orgName 
+}) {
+  try {
+    const transporter = createTransporter();
+
+    const mailOptions = {
+      from: `"Puviyan Team" <${process.env.SMTP_USER || 'cto@puviyan.com'}>`,
+      to,
+      subject: `Reward Approval Request: ${rewardTitle}`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            body { 
+              font-family: 'Segoe UI Variable', Arial, sans-serif; 
+              line-height: 1.6; 
+              color: #FFFFFF; 
+              background-color: #0A0A0A;
+              margin: 0;
+              padding: 0;
+            }
+            .container { 
+              max-width: 849px; 
+              margin: 40px auto; 
+              background-color: #1A1A1A; 
+              border-radius: 24px; 
+              padding: 32px 24px;
+            }
+            .header { 
+              display: flex;
+              align-items: center;
+              gap: 16px;
+              padding-bottom: 24px;
+              border-bottom: 1px solid rgba(5, 5, 5, 0.5);
+            }
+            .logo {
+              width: 43px;
+              height: 40px;
+              background: linear-gradient(180deg, #FABB15 0%, #48C84F 50%, #63DEF3 100%);
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 24px;
+            }
+            .header-title {
+              font-weight: 600;
+              font-size: 32px;
+              line-height: 40px;
+              color: #E0F8FD;
+            }
+            .content { 
+              padding: 24px 0;
+            }
+            .section {
+              margin-bottom: 24px;
+            }
+            .section-title {
+              font-weight: 600;
+              font-size: 16px;
+              line-height: 20px;
+              margin-bottom: 16px;
+            }
+            .section-subtitle {
+              font-weight: 400;
+              font-size: 18px;
+              line-height: 20px;
+              margin-bottom: 16px;
+            }
+            .section-text {
+              font-weight: 400;
+              font-size: 16px;
+              line-height: 24px;
+              margin-bottom: 16px;
+            }
+            .info-item {
+              font-weight: 400;
+              font-size: 16px;
+              line-height: 20px;
+              margin: 8px 0;
+            }
+            .footer { 
+              text-align: center; 
+              padding-top: 32px;
+              border-top: 1px solid rgba(5, 5, 5, 0.5);
+            }
+            .social-links {
+              display: flex;
+              justify-content: center;
+              gap: 24px;
+              margin-bottom: 10px;
+            }
+            .social-icon {
+              width: 24px;
+              height: 24px;
+              color: #FFFFFF;
+            }
+            .footer-links {
+              color: #CCCCCC;
+              font-size: 14px;
+              line-height: 22px;
+              margin: 10px 0;
+            }
+            .footer-links a {
+              color: #CCCCCC;
+              text-decoration: none;
+            }
+            .footer-text {
+              color: #CCCCCC;
+              font-size: 14px;
+              line-height: 22px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <div class="logo">🌱</div>
+              <div class="header-title">I am Puviyan</div>
+            </div>
+            
+            <div class="content">
+              <div class="section">
+                <div class="section-title">Hi ${orgName || 'Team'},</div>
+                <div class="section-subtitle">Reward Approval Request</div>
+                <div class="section-text">
+                  ${userName} has requested approval for the following reward:
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="info-item"><strong>Reward:</strong> ${rewardTitle}</div>
+                <div class="info-item"><strong>Points Reserved:</strong> ${pointsReserved} points</div>
+                <div class="info-item"><strong>Redemption ID:</strong> ${redemptionId}</div>
+              </div>
+
+              <div class="section">
+                <div class="section-text">
+                  Please review this request and take appropriate action. The user's points have been reserved and will be released if the request is denied.
+                </div>
+                <div class="section-text">
+                  If you have questions about this request, please contact the user or your HR representative.
+                </div>
+              </div>
+
+              <div class="section">
+                <div class="section-text">
+                  Thanks for participating!<br>
+                  I am Puviyan Team
+                </div>
+              </div>
+            </div>
+
+            <div class="footer">
+              <div class="social-links">
+                <span class="social-icon">𝕏</span>
+                <span class="social-icon">f</span>
+                <span class="social-icon">📷</span>
+                <span class="social-icon">in</span>
+              </div>
+              <div class="footer-links">
+                <a href="https://puviyan.com/terms">Terms of Service</a> | 
+                <a href="https://puviyan.com/privacy">Privacy Policy</a>
+              </div>
+              <div class="footer-text">
+                All rights reserved © 2025 Puviyan Digital Solutions Private Limited
+              </div>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `
+Hi ${orgName || 'Team'},
+
+Reward Approval Request
+
+${userName} has requested approval for the following reward:
+
+Reward: ${rewardTitle}
+Points Reserved: ${pointsReserved} points
+Redemption ID: ${redemptionId}
+
+Please review this request and take appropriate action. The user's points have been reserved and will be released if the request is denied.
+
+If you have questions about this request, please contact the user or your HR representative.
+
+Thanks for participating!
+I am Puviyan Team
+
+---
+Terms of Service | Privacy Policy
+All rights reserved © 2025 Puviyan Digital Solutions Private Limited
+      `.trim(),
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Reward approval email sent:', info.messageId);
+    
+    return {
+      success: true,
+      messageId: info.messageId,
+    };
+  } catch (error) {
+    console.error('❌ Failed to send reward approval email:', error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}
+
 module.exports = {
   sendSignupLinkEmail,
   sendRejectionEmail,
+  sendRewardApprovalEmail,
 };
