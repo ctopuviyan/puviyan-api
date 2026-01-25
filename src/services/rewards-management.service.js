@@ -89,7 +89,7 @@ async function createReward(rewardData, createdBy) {
     rewardDetails: rewardData.rewardDetails || [],
     
     // Brand/Partner
-    brandName: rewardData.brandName,
+    brandName: rewardData.brandName || null,
     partnerId: rewardData.partnerId || null,
     
     // Points
