@@ -55,6 +55,26 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
 
   const snapshot = await query.get();
 
+  // Get unique orgIds from rewards to fetch organization details
+  const orgIds = [...new Set(snapshot.docs.map(doc => doc.data().orgId).filter(id => id))];
+  const orgMap = {};
+  
+  // Fetch organization details for all unique orgIds
+  if (orgIds.length > 0) {
+    const orgPromises = orgIds.map(orgId => db.collection('organizations').doc(orgId).get());
+    const orgDocs = await Promise.all(orgPromises);
+    
+    orgDocs.forEach((orgDoc, index) => {
+      if (orgDoc.exists) {
+        const orgData = orgDoc.data();
+        orgMap[orgIds[index]] = {
+          orgName: orgData.name || orgData.organizationName,
+          orgLogoUrl: orgData.logoUrl || orgData.logo
+        };
+      }
+    });
+  }
+
   // Filter rewards based on orgId
   const rewards = snapshot.docs
     .map(doc => {
@@ -62,6 +82,9 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
       // Use badgeImageUrl as fallback for previewImage if it's empty (for digital_badge type)
       const previewImage = data.previewImage || (data.rewardType === 'digital_badge' ? data.badgeImageUrl : '') || '';
       const fullImage = data.fullImage || (data.rewardType === 'digital_badge' ? data.badgeImageUrl : '') || '';
+      
+      // Get organization details if reward has orgId
+      const orgInfo = data.orgId ? orgMap[data.orgId] : null;
       
       return {
         rewardId: doc.id,
@@ -93,7 +116,9 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
         status: data.status,
         createdAt: data.createdAt?.toDate?.()?.toISOString(),
         updatedAt: data.updatedAt?.toDate?.()?.toISOString(),
-        orgId: data.orgId // Include orgId in response
+        orgId: data.orgId, // Include orgId in response
+        orgName: orgInfo?.orgName || null, // Include organization name
+        orgLogoUrl: orgInfo?.orgLogoUrl || null // Include organization logo
       };
     })
     .filter(reward => {
