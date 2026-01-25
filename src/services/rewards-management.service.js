@@ -14,7 +14,7 @@ async function createReward(rewardData, createdBy) {
   const db = getFirestore();
 
   // Validate required fields
-  const requiredFields = ['rewardTitle', 'rewardType', 'brandName', 'deductPoints', 'validFrom', 'validTo'];
+  const requiredFields = ['rewardTitle', 'rewardType', 'deductPoints', 'validFrom', 'validTo'];
   for (const field of requiredFields) {
     if (!rewardData[field]) {
       throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Missing required field: ${field}`);
@@ -25,6 +25,11 @@ async function createReward(rewardData, createdBy) {
   const validTypes = ['coupon', 'percent_off', 'amount_off', 'digital_badge', 'meal_coupon', 'email_approval'];
   if (!validTypes.includes(rewardData.rewardType)) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid rewardType. Must be one of: ${validTypes.join(', ')}`);
+  }
+
+  // Validate brandName only for types that need it
+  if (['coupon', 'percent_off', 'amount_off'].includes(rewardData.rewardType) && !rewardData.brandName) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'brandName is required for coupon, percent_off, and amount_off types');
   }
 
   // Type-specific validation
