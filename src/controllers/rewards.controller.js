@@ -43,7 +43,7 @@ async function getRewardDetails(req, res, next) {
  */
 async function reserveReward(req, res, next) {
   try {
-    const { rewardId, userId } = req.body;
+    const { rewardId, userId, skipPointDeduction = false } = req.body;
     // For testing: accept userId from body, for production: use req.user.uid
     const actualUserId = req.user?.uid || userId;
 
@@ -56,7 +56,8 @@ async function reserveReward(req, res, next) {
 
     const result = await rewardsService.reserveReward({
       userId: actualUserId,
-      rewardId
+      rewardId,
+      skipPointDeduction
     });
 
     res.status(HTTP_STATUS.CREATED).json(result);

@@ -164,8 +164,11 @@ async function getRewardDetails(rewardId) {
 
 /**
  * Reserve reward - Deduct points and create redemption
+ * @param {string} userId - User ID
+ * @param {string} rewardId - Reward ID
+ * @param {boolean} skipPointDeduction - If true, validates eligibility but doesn't deduct points (for early release)
  */
-async function reserveReward({ userId, rewardId }) {
+async function reserveReward({ userId, rewardId, skipPointDeduction = false }) {
   const db = getFirestore();
 
   // Get reward details
@@ -224,10 +227,15 @@ async function reserveReward({ userId, rewardId }) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.RWD_MAX_LIMIT_REACHED, 'You have already redeemed this reward the maximum number of times');
   }
 
-  // Check user's points balance
+  // Check user's points balance (always validate eligibility)
   const userPoints = await pointsService.getPointsBalance(userId);
   if (userPoints.balance < reward.deductPoints) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.PTS_INSUFFICIENT_BALANCE, `You need ${reward.deductPoints} points but have ${userPoints.balance}`);
+  }
+
+  // Log if running in eligibility-only mode
+  if (skipPointDeduction) {
+    console.log(`ℹ️ Eligibility-only mode: Points will not be deducted for redemption ${redemptionId}`);
   }
 
   // Create redemption using transaction
@@ -236,8 +244,10 @@ async function reserveReward({ userId, rewardId }) {
 
   try {
     await db.runTransaction(async (transaction) => {
-      // Reserve points (lock but don't deduct yet)
-      await pointsService.reservePoints(userId, reward.deductPoints, redemptionId);
+      // Reserve points only if not skipping point deduction
+      if (!skipPointDeduction) {
+        await pointsService.reservePoints(userId, reward.deductPoints, redemptionId);
+      }
 
       // Decrement available coupons (for coupon type)
       if (reward.rewardType === 'coupon') {
@@ -261,7 +271,7 @@ async function reserveReward({ userId, rewardId }) {
         rewardType: reward.rewardType || 'coupon',
         brandName: reward.brandName,
         partnerId: reward.partnerId || null,
-        pointsDeducted: reward.deductPoints,
+        pointsDeducted: skipPointDeduction ? 0 : reward.deductPoints,
         couponCode,
         discountPercent: reward.discountPercent || null,
         discountAmount: reward.discountAmount || null,
@@ -333,11 +343,13 @@ async function reserveReward({ userId, rewardId }) {
       couponCode: reward.rewardType === 'coupon' ? generateCouponCode(reward.brandName, redemptionId) : null,
       qrToken,
       qrCodeUrl,
-      pointsDeducted: reward.deductPoints,
+      pointsDeducted: skipPointDeduction ? 0 : reward.deductPoints,
       expiresAt: expiresAt.toISOString(),
       message: reward.rewardType === 'email_approval' 
         ? 'Reward reserved successfully. An approval request has been sent to the approver.'
-        : 'Reward reserved successfully'
+        : skipPointDeduction
+          ? 'Reward claimed successfully. No points deducted (early release mode).'
+          : 'Reward reserved successfully'
     };
 
   } catch (error) {
