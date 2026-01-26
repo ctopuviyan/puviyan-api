@@ -43,7 +43,10 @@ async function getRewardDetails(req, res, next) {
  */
 async function reserveReward(req, res, next) {
   try {
-    const { rewardId, userId, skipPointDeduction = false } = req.body;
+    // Use environment variable as default, but allow override from request body
+    const envSkipPointDeduction = process.env.SKIP_POINT_DEDUCTION === 'true';
+    const { rewardId, userId, skipPointDeduction = envSkipPointDeduction } = req.body;
+    
     // For testing: accept userId from body, for production: use req.user.uid
     const actualUserId = req.user?.uid || userId;
 
