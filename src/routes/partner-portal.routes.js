@@ -35,6 +35,36 @@ router.get('/me', verifyPartnerFirebaseToken, apiLimiter, partnerPortalControlle
 router.get('/dashboard/metrics', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.getDashboardMetrics);
 
 /**
+ * Partner Portal - Save event draft (create/update)
+ * Requires: Partner Firebase Auth token
+ */
+router.post('/events/drafts', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.saveEventDraft);
+
+/**
+ * Partner Portal - List event drafts
+ * Requires: Partner Firebase Auth token
+ */
+router.get('/events/drafts', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.listEventDrafts);
+
+/**
+ * Partner Portal - Get event draft by ID
+ * Requires: Partner Firebase Auth token
+ */
+router.get('/events/drafts/:draftId', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.getEventDraft);
+
+/**
+ * Partner Portal - Publish event draft
+ * Requires: Partner Firebase Auth token
+ */
+router.post('/events/publish/:draftId', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.publishEventDraft);
+
+/**
+ * Partner Portal - List published events for partner org
+ * Requires: Partner Firebase Auth token
+ */
+router.get('/events', verifyPartnerFirebaseToken, apiLimiter, partnerPortalController.listPartnerEvents);
+
+/**
  * Create a new organization and bootstrap the requesting partner user
  * Requires: Partner Firebase Auth token
  */

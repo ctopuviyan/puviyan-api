@@ -16,6 +16,100 @@ async function getMe(req, res, next) {
   }
 }
 
+async function saveEventDraft(req, res, next) {
+  try {
+    const { draftId, data } = req.body || {};
+
+    const result = await partnerPortalService.saveEventDraft({
+      partnerUid: req.partnerUser.uid,
+      partnerEmail: req.partnerUser.email || null,
+      draftId: draftId || null,
+      data,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listEventDrafts(req, res, next) {
+  try {
+    const { limit } = req.query;
+
+    const result = await partnerPortalService.listEventDrafts({
+      partnerUid: req.partnerUser.uid,
+      limit: parseInt(limit) || 50,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getEventDraft(req, res, next) {
+  try {
+    const { draftId } = req.params;
+
+    const result = await partnerPortalService.getEventDraft({
+      partnerUid: req.partnerUser.uid,
+      draftId,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function publishEventDraft(req, res, next) {
+  try {
+    const { draftId } = req.params;
+
+    const result = await partnerPortalService.publishEventDraft({
+      partnerUid: req.partnerUser.uid,
+      partnerEmail: req.partnerUser.email || null,
+      draftId,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function listPartnerEvents(req, res, next) {
+  try {
+    const { status, limit } = req.query;
+
+    const result = await partnerPortalService.listPartnerEvents({
+      partnerUid: req.partnerUser.uid,
+      status: status || null,
+      limit: parseInt(limit) || 50,
+    });
+
+    res.status(HTTP_STATUS.OK).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function createOrg(req, res, next) {
   try {
     const { orgName, orgId } = req.body || {};
@@ -232,4 +326,9 @@ module.exports = {
   rejectOrgLinkRequest,
   getDashboardMetrics,
   getOrgUsers,
+  saveEventDraft,
+  listEventDrafts,
+  getEventDraft,
+  publishEventDraft,
+  listPartnerEvents,
 };

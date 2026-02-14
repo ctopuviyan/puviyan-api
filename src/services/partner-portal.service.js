@@ -21,6 +21,67 @@ function generateInviteCode() {
   return crypto.randomBytes(6).toString('base64url').slice(0, 8);
 }
 
+function isValidUrl(value) {
+  try {
+    // eslint-disable-next-line no-new
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function validateEventData(data) {
+  const errors = [];
+
+  const name = (data?.basics?.event_name || '').trim();
+  if (!name || name.length < 5 || name.length > 100) errors.push('Invalid event name');
+
+  const mode = data?.basics?.mode;
+  if (mode !== 'in_person' && mode !== 'online') errors.push('Invalid mode');
+
+  if (!data?.basics?.event_type) errors.push('Event type required');
+
+  if (mode === 'in_person') {
+    const loc = data?.basics?.location;
+    if (!loc?.venueName?.trim()) errors.push('Venue name required');
+    if (!loc?.address?.trim()) errors.push('Address required');
+    if (!loc?.city?.trim()) errors.push('City required');
+    if (!loc?.pinCode?.trim()) errors.push('Pin code required');
+  } else if (mode === 'online') {
+    const link = (data?.basics?.online_link || '').trim();
+    if (!link || link.length > 255 || !isValidUrl(link)) errors.push('Invalid online link');
+  }
+
+  const about = (data?.basics?.about || '').trim();
+  if (!about || about.length < 20 || about.length > 2000) errors.push('Invalid about');
+
+  const checkin = data?.basics?.checkin_method;
+  if (checkin !== 'gps' && checkin !== 'qr') errors.push('Invalid check-in method');
+
+  const start = data?.schedule?.start_datetime;
+  const end = data?.schedule?.end_datetime;
+  if (!start) errors.push('Start datetime required');
+  if (!end) errors.push('End datetime required');
+  if (start && end) {
+    const startMs = new Date(start).getTime();
+    const endMs = new Date(end).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) errors.push('Invalid datetime');
+    else if (endMs <= startMs) errors.push('End must be after start');
+  }
+
+  if (data?.schedule?.is_recurring && !data?.schedule?.recurrence_type) {
+    errors.push('Recurrence type required');
+  }
+
+  if (!data?.capacity_goals?.unlimited) {
+    const spots = data?.capacity_goals?.spots;
+    if (spots == null || Number(spots) <= 0 || Number(spots) > 1000000) errors.push('Invalid spots');
+  }
+
+  return errors;
+}
+
 async function getPartnerMe({ partnerUid }) {
   const db = getFirestore();
 
@@ -75,6 +136,194 @@ async function getPartnerMe({ partnerUid }) {
     org,
     allowedDepartments,
   };
+}
+
+async function getPartnerOrgContext(partnerUid) {
+  const db = getFirestore();
+
+  const partnerUserDoc = await db.collection('partnerUsers').doc(partnerUid).get();
+  if (!partnerUserDoc.exists) {
+    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'User is not onboarded as a partner user');
+  }
+  const partnerUser = partnerUserDoc.data();
+  const orgId = partnerUser.orgId;
+  if (!orgId) {
+    throw new ApiError(HTTP_STATUS.INTERNAL_ERROR, ERROR_CODES.SYS_DATABASE_ERROR, 'partnerUsers record missing orgId');
+  }
+
+  return {
+    orgId,
+    partnerUser,
+  };
+}
+
+async function saveEventDraft({ partnerUid, draftId = null, data, partnerEmail = null }) {
+  const db = getFirestore();
+
+  const { orgId } = await getPartnerOrgContext(partnerUid);
+
+  if (!data || typeof data !== 'object') {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_INVALID_VALUE, 'data is required');
+  }
+
+  const ref = draftId ? db.collection('eventDrafts').doc(draftId) : db.collection('eventDrafts').doc();
+  const now = new Date();
+
+  await ref.set(
+    {
+      orgId,
+      status: 'draft',
+      data,
+      updatedAt: now,
+      createdAt: now,
+      updatedByUid: partnerUid,
+      updatedByEmail: partnerEmail || null,
+    },
+    { merge: true }
+  );
+
+  return { draftId: ref.id };
+}
+
+async function listEventDrafts({ partnerUid, limit = 50 }) {
+  const db = getFirestore();
+  const { orgId } = await getPartnerOrgContext(partnerUid);
+
+  const snap = await db
+    .collection('eventDrafts')
+    .where('orgId', '==', orgId)
+    .where('updatedByUid', '==', partnerUid)
+    .orderBy('updatedAt', 'desc')
+    .limit(Math.min(Number(limit) || 50, 200))
+    .get();
+
+  const drafts = snap.docs.map((doc) => {
+    const d = doc.data() || {};
+    return {
+      id: doc.id,
+      status: d.status,
+      updatedAt: d.updatedAt?.toDate?.()?.toISOString?.() ?? null,
+      createdAt: d.createdAt?.toDate?.()?.toISOString?.() ?? null,
+      eventName: d.data?.basics?.event_name ?? '',
+      mode: d.data?.basics?.mode ?? '',
+    };
+  });
+
+  return { drafts };
+}
+
+async function getEventDraft({ partnerUid, draftId }) {
+  const db = getFirestore();
+  const { orgId } = await getPartnerOrgContext(partnerUid);
+
+  if (!draftId) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_MISSING_FIELD, 'draftId is required');
+  }
+
+  const doc = await db.collection('eventDrafts').doc(draftId).get();
+  if (!doc.exists) {
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_NOT_FOUND, 'Draft not found');
+  }
+
+  const d = doc.data() || {};
+  if (d.orgId !== orgId || d.updatedByUid !== partnerUid) {
+    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Forbidden');
+  }
+
+  return {
+    id: doc.id,
+    status: d.status,
+    data: d.data,
+    updatedAt: d.updatedAt?.toDate?.()?.toISOString?.() ?? null,
+  };
+}
+
+async function publishEventDraft({ partnerUid, draftId, partnerEmail = null }) {
+  const db = getFirestore();
+  const { orgId } = await getPartnerOrgContext(partnerUid);
+
+  if (!draftId) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_MISSING_FIELD, 'draftId is required');
+  }
+
+  const draftRef = db.collection('eventDrafts').doc(draftId);
+  const draftDoc = await draftRef.get();
+  if (!draftDoc.exists) {
+    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.USR_NOT_FOUND, 'Draft not found');
+  }
+
+  const draft = draftDoc.data() || {};
+  if (draft.orgId !== orgId || draft.updatedByUid !== partnerUid) {
+    throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Forbidden');
+  }
+
+  const data = draft.data;
+  const validationErrors = validateEventData(data);
+  if (validationErrors.length > 0) {
+    const err = new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_VALIDATION_ERROR, 'Validation failed');
+    err.details = validationErrors;
+    throw err;
+  }
+
+  const eventRef = db.collection('events').doc();
+  const now = new Date();
+
+  await db.runTransaction(async (tx) => {
+    tx.set(eventRef, {
+      orgId,
+      status: 'published',
+      data,
+      createdAt: now,
+      createdByUid: partnerUid,
+      createdByEmail: partnerEmail || null,
+      updatedAt: now,
+    });
+
+    tx.set(
+      draftRef,
+      {
+        status: 'published',
+        publishedAt: now,
+        publishedEventId: eventRef.id,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+  });
+
+  return { eventId: eventRef.id };
+}
+
+async function listPartnerEvents({ partnerUid, status = null, limit = 50 }) {
+  const db = getFirestore();
+  const { orgId } = await getPartnerOrgContext(partnerUid);
+
+  let query = db.collection('events').where('orgId', '==', orgId);
+  if (status) {
+    query = query.where('status', '==', status);
+  }
+
+  const snap = await query
+    .orderBy('createdAt', 'desc')
+    .limit(Math.min(Number(limit) || 50, 200))
+    .get();
+
+  const events = snap.docs.map((doc) => {
+    const d = doc.data() || {};
+    return {
+      id: doc.id,
+      status: d.status,
+      createdAt: d.createdAt?.toDate?.()?.toISOString?.() ?? null,
+      updatedAt: d.updatedAt?.toDate?.()?.toISOString?.() ?? null,
+      eventName: d.data?.basics?.event_name ?? '',
+      mode: d.data?.basics?.mode ?? '',
+      eventType: d.data?.basics?.event_type ?? '',
+      start: d.data?.schedule?.start_datetime ?? '',
+      end: d.data?.schedule?.end_datetime ?? '',
+    };
+  });
+
+  return { events };
 }
 
 async function createOrg({ partnerUid, orgName, requestedOrgId = null }) {
@@ -851,6 +1100,11 @@ async function getOrgUsers(partnerUid, orgId) {
 
 module.exports = {
   getPartnerMe,
+  saveEventDraft,
+  listEventDrafts,
+  getEventDraft,
+  publishEventDraft,
+  listPartnerEvents,
   createOrg,
   joinOrg,
   rotateOrgInviteCode,
