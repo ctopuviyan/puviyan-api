@@ -29,6 +29,7 @@ const uploadRoutes = require('./routes/upload.routes');
 const signupRoutes = require('./routes/signup.routes');
 const organizationRoutes = require('./routes/organization.routes');
 const userProfileRoutes = require('./routes/user-profile.routes');
+const eventsRoutes = require('./routes/events.routes');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -84,6 +85,7 @@ app.use(`/api/${API_VERSION}/points`, pointsRoutes);
 app.use(`/api/${API_VERSION}/admin`, adminRoutes);
 app.use(`/api/${API_VERSION}/upload`, uploadRoutes);
 app.use(`/api/${API_VERSION}/organizations`, organizationRoutes);
+app.use(`/api/${API_VERSION}/events`, eventsRoutes);
 app.use(`/api/${API_VERSION}/user`, userProfileRoutes);
 app.use(`/api/${API_VERSION}`, signupRoutes);
 

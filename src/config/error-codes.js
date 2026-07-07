@@ -11,6 +11,7 @@
  * - RDM: Redemption errors
  * - PTR: Partner errors
  * - USR: User errors
+ * - EVT: Events errors
  * - SYS: System & Server errors
  */
 
@@ -108,6 +109,37 @@ const ERROR_CODES = {
   USR_UPDATE_FAILED: 'USR-007',
 
   // ============================================
+  // Events (EVT-001 to EVT-099)
+  // ============================================
+  EVT_NOT_FOUND: 'EVT-001',
+  EVT_EXPIRED: 'EVT-002',
+  EVT_NOT_ACTIVE: 'EVT-003',
+  EVT_ALREADY_STARTED: 'EVT-004',
+  EVT_ALREADY_ENDED: 'EVT-005',
+  EVT_FULL: 'EVT-006',
+  EVT_INVALID_TYPE: 'EVT-007',
+  EVT_INVALID_MODE: 'EVT-008',
+  EVT_INVALID_STATUS: 'EVT-009',
+  EVT_INVALID_STATUS_TRANSITION: 'EVT-010',
+  EVT_CREATION_FAILED: 'EVT-011',
+  EVT_UPDATE_FAILED: 'EVT-012',
+  EVT_DELETE_FAILED: 'EVT-013',
+  EVT_PUBLISH_FAILED: 'EVT-014',
+  EVT_CANCEL_FAILED: 'EVT-015',
+  EVT_COMPLETE_FAILED: 'EVT-016',
+  EVT_REGISTRATION_FAILED: 'EVT-017',
+  EVT_ALREADY_REGISTERED: 'EVT-018',
+  EVT_REGISTRATION_CLOSED: 'EVT-019',
+  EVT_CHECKIN_FAILED: 'EVT-020',
+  EVT_ALREADY_CHECKED_IN: 'EVT-021',
+  EVT_INVALID_LOCATION: 'EVT-022',
+  EVT_OUTSIDE_CHECKIN_RADIUS: 'EVT-023',
+  EVT_ORG_RESTRICTED: 'EVT-024',
+  EVT_INVALID_POINTS_CONFIG: 'EVT-025',
+  EVT_LEADERBOARD_FAILED: 'EVT-026',
+  EVT_IMAGE_UPLOAD_FAILED: 'EVT-027',
+
+  // ============================================
   // System & Server (SYS-001 to SYS-099)
   // ============================================
   SYS_INTERNAL_ERROR: 'SYS-001',
@@ -198,6 +230,35 @@ const ERROR_MESSAGES = {
   'USR-005': 'User profile is incomplete',
   'USR-006': 'User already exists',
   'USR-007': 'Failed to update user',
+
+  // Events
+  'EVT-001': 'Event not found',
+  'EVT-002': 'Event has expired',
+  'EVT-003': 'Event is not active',
+  'EVT-004': 'Event has already started',
+  'EVT-005': 'Event has already ended',
+  'EVT-006': 'Event is full - no spots available',
+  'EVT-007': 'Invalid event type specified',
+  'EVT-008': 'Invalid event mode specified',
+  'EVT-009': 'Invalid event status',
+  'EVT-010': 'Invalid status transition for event',
+  'EVT-011': 'Failed to create event',
+  'EVT-012': 'Failed to update event',
+  'EVT-013': 'Failed to delete event',
+  'EVT-014': 'Failed to publish event',
+  'EVT-015': 'Failed to cancel event',
+  'EVT-016': 'Failed to complete event',
+  'EVT-017': 'Failed to register for event',
+  'EVT-018': 'User is already registered for this event',
+  'EVT-019': 'Event registration is closed',
+  'EVT-020': 'Failed to check in to event',
+  'EVT-021': 'User has already checked in to this event',
+  'EVT-022': 'Invalid event location',
+  'EVT-023': 'User is outside the check-in radius for this event',
+  'EVT-024': 'This event is only available to specific organization members',
+  'EVT-025': 'Invalid points configuration for event',
+  'EVT-026': 'Failed to generate event leaderboard',
+  'EVT-027': 'Failed to upload event banner image',
 
   // System & Server
   'SYS-001': 'Internal server error occurred',

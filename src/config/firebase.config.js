@@ -48,8 +48,7 @@ function initializeFirebase() {
 }
 
 /**
- * Initialize Firebase Admin SDK for Partner Portal Auth
- * Used only for verifying ID tokens from the partner Firebase project.
+ * Initialize Partner Firebase Admin SDK
  */
 function initializePartnerFirebase() {
   if (partnerFirebaseApp) {
@@ -136,16 +135,6 @@ function getFirestore() {
 }
 
 /**
- * Get Partner Firestore instance (Partner Portal)
- */
-function getPartnerFirestore() {
-  if (!partnerFirebaseApp) {
-    throw new Error('Partner Firebase not initialized. Call initializePartnerFirebase() first.');
-  }
-  return partnerFirebaseApp.firestore();
-}
-
-/**
  * Get Firebase Auth instance (Consumer App)
  */
 function getAuth() {
@@ -163,6 +152,16 @@ function getPartnerAuth() {
     throw new Error('Partner Firebase not initialized. Call initializePartnerFirebase() first.');
   }
   return partnerFirebaseApp.auth();
+}
+
+/**
+ * Get Partner Firestore instance (Partner Portal)
+ */
+function getPartnerFirestore() {
+  if (!partnerFirebaseApp) {
+    throw new Error('Partner Firebase not initialized. Call initializePartnerFirebase() first.');
+  }
+  return partnerFirebaseApp.firestore();
 }
 
 module.exports = {
