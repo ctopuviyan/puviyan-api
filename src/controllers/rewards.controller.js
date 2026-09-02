@@ -38,6 +38,68 @@ async function getRewardDetails(req, res, next) {
   }
 }
 
+async function getDigitalBadges(req, res, next) {
+  try {
+    const result = await rewardsService.getDigitalBadges({
+      userId: req.user.uid,
+      timeZone: req.headers['x-timezone'] || req.query.timezone
+    });
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getAchievedDigitalBadges(req, res, next) {
+  try {
+    const result = await rewardsService.getAchievedDigitalBadges({
+      userId: req.user.uid,
+      timeZone: req.headers['x-timezone'] || req.query.timezone
+    });
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getPublicAchievedDigitalBadges(req, res, next) {
+  try {
+    const result = await rewardsService.getPublicAchievedDigitalBadges({
+      userId: req.params.userId
+    });
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getDigitalBadgeDetails(req, res, next) {
+  try {
+    const result = await rewardsService.getDigitalBadgeDetails({
+      userId: req.user.uid,
+      rewardId: req.params.rewardId,
+      timeZone: req.headers['x-timezone'] || req.query.timezone
+    });
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function recalculateDigitalBadges(req, res, next) {
+  try {
+    const result = await rewardsService.recalculateDigitalBadges({
+      userId: req.user.uid,
+      timeZone: req.headers['x-timezone'] || req.body?.timezone,
+      force: req.body?.force === true,
+      reason: req.body?.reason || 'app_launch'
+    });
+    res.status(HTTP_STATUS.OK).json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
 /**
  * Reserve reward
  */
@@ -139,6 +201,11 @@ async function redeemReward(req, res, next) {
 module.exports = {
   getAvailableRewards,
   getRewardDetails,
+  getDigitalBadges,
+  getAchievedDigitalBadges,
+  getPublicAchievedDigitalBadges,
+  getDigitalBadgeDetails,
+  recalculateDigitalBadges,
   reserveReward,
   getUserRedemptions,
   cancelRedemption,

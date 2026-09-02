@@ -2,10 +2,56 @@ const { getFirestore, admin } = require('../config/firebase.config');
 const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 const { ApiError } = require('../middleware/error.middleware');
 
+const DIGITAL_BADGE_TYPES = ['puviStreaker', 'recordDay', 'carbonImpactChampion'];
+
 /**
  * Rewards Management Service - CRUD operations for rewards
  * Allows partners/admins to create and manage rewards
  */
+
+function validateDigitalBadgeConditions(conditions) {
+  if (!conditions || !DIGITAL_BADGE_TYPES.includes(conditions.badgeType)) {
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VALIDATION_ERROR,
+      `conditions.badgeType must be one of: ${DIGITAL_BADGE_TYPES.join(', ')}`
+    );
+  }
+
+  const requiredField = {
+    puviStreaker: 'requiredStreakDays',
+    recordDay: 'requiredRecordDayCarbonKg',
+    carbonImpactChampion: 'requiredChampionCarbonKg'
+  }[conditions.badgeType];
+
+  if (Number(conditions[requiredField]) <= 0) {
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VALIDATION_ERROR,
+      `conditions.${requiredField} must be greater than zero`
+    );
+  }
+}
+
+function parseRewardDate(value, fieldName, { inclusiveEndDate = false } = {}) {
+  const parsedDate = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid ${fieldName}`);
+  }
+
+  if (
+    inclusiveEndDate &&
+    parsedDate.getUTCHours() === 0 &&
+    parsedDate.getUTCMinutes() === 0 &&
+    parsedDate.getUTCSeconds() === 0 &&
+    parsedDate.getUTCMilliseconds() === 0
+  ) {
+    parsedDate.setUTCHours(23, 59, 59, 999);
+  }
+
+  return parsedDate;
+}
 
 /**
  * Create new reward
@@ -58,6 +104,7 @@ async function createReward(rewardData, createdBy) {
     if (!rewardData.badgeName) {
       throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeName is required for digital_badge type');
     }
+    validateDigitalBadgeConditions(rewardData.conditions);
   }
 
   if (rewardData.rewardType === 'meal_coupon') {
@@ -115,6 +162,9 @@ async function createReward(rewardData, createdBy) {
     badgeImageUrl: rewardData.rewardType === 'digital_badge' ? rewardData.badgeImageUrl : null,
     badgeName: rewardData.rewardType === 'digital_badge' ? rewardData.badgeName : null,
     badgeDescription: rewardData.rewardType === 'digital_badge' ? (rewardData.badgeDescription || null) : null,
+    conditions: rewardData.rewardType === 'digital_badge'
+      ? { ...rewardData.conditions, isEnabled: rewardData.conditions.isEnabled !== false }
+      : null,
     
     // Meal Coupon fields
     mealType: rewardData.rewardType === 'meal_coupon' ? rewardData.mealType : null,
@@ -133,8 +183,8 @@ async function createReward(rewardData, createdBy) {
     maxPerUser: rewardData.maxPerUser || 1,
     
     // Validity
-    validFrom: rewardData.validFrom instanceof Date ? rewardData.validFrom : new Date(rewardData.validFrom),
-    validTo: rewardData.validTo instanceof Date ? rewardData.validTo : new Date(rewardData.validTo),
+    validFrom: parseRewardDate(rewardData.validFrom, 'validFrom'),
+    validTo: parseRewardDate(rewardData.validTo, 'validTo', { inclusiveEndDate: true }),
     status: rewardData.status || 'active',
     
     // Instructions
@@ -196,18 +246,27 @@ async function updateReward(rewardId, updates, updatedBy) {
 
   // If changing rewardType, validate type-specific fields
   if (updates.rewardType && updates.rewardType !== currentReward.rewardType) {
-    const validTypes = ['coupon', 'percent_off', 'amount_off'];
+    const validTypes = ['coupon', 'percent_off', 'amount_off', 'digital_badge', 'meal_coupon', 'email_approval'];
     if (!validTypes.includes(updates.rewardType)) {
       throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid rewardType. Must be one of: ${validTypes.join(', ')}`);
     }
   }
 
-  // Convert date strings to Date objects
-  if (updates.validFrom && !(updates.validFrom instanceof Date)) {
-    updates.validFrom = new Date(updates.validFrom);
+  const resultingType = updates.rewardType || currentReward.rewardType;
+  if (resultingType === 'digital_badge' && updates.conditions) {
+    validateDigitalBadgeConditions(updates.conditions);
+    updates.conditions = {
+      ...updates.conditions,
+      isEnabled: updates.conditions.isEnabled !== false
+    };
   }
-  if (updates.validTo && !(updates.validTo instanceof Date)) {
-    updates.validTo = new Date(updates.validTo);
+
+  // Convert date strings to Date objects
+  if (updates.validFrom) {
+    updates.validFrom = parseRewardDate(updates.validFrom, 'validFrom');
+  }
+  if (updates.validTo) {
+    updates.validTo = parseRewardDate(updates.validTo, 'validTo', { inclusiveEndDate: true });
   }
 
   const updateData = {

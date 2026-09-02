@@ -6,6 +6,7 @@ const pointsService = require('./points.service');
 const emailService = require('./email.service');
 const QRCode = require('qrcode');
 const { userOrgCache } = require('../middleware/cache.middleware');
+const digitalBadgeService = require('./digital-badge.service');
 
 /**
  * Rewards Service - Handles browsing and reserving rewards
@@ -136,6 +137,26 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
     limit,
     offset
   };
+}
+
+function getDigitalBadges({ userId, timeZone }) {
+  return digitalBadgeService.getDigitalBadges({ userId, timeZone });
+}
+
+function getAchievedDigitalBadges({ userId, timeZone }) {
+  return digitalBadgeService.getAchievedDigitalBadges({ userId, timeZone });
+}
+
+function getPublicAchievedDigitalBadges({ userId }) {
+  return digitalBadgeService.getPublicAchievedDigitalBadges({ userId });
+}
+
+function getDigitalBadgeDetails({ userId, rewardId, timeZone }) {
+  return digitalBadgeService.getDigitalBadges({ userId, rewardId, timeZone });
+}
+
+function recalculateDigitalBadges({ userId, timeZone, force, reason }) {
+  return digitalBadgeService.recalculateDigitalBadges({ userId, timeZone, force, reason });
 }
 
 /**
@@ -526,6 +547,11 @@ function generateCouponCode(brandName, redemptionId) {
 module.exports = {
   getAvailableRewards,
   getRewardDetails,
+  getDigitalBadges,
+  getAchievedDigitalBadges,
+  getPublicAchievedDigitalBadges,
+  getDigitalBadgeDetails,
+  recalculateDigitalBadges,
   reserveReward,
   getUserRedemptions,
   cancelRedemption,
