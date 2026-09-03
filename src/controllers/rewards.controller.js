@@ -92,7 +92,8 @@ async function recalculateDigitalBadges(req, res, next) {
       userId: req.user.uid,
       timeZone: req.headers['x-timezone'] || req.body?.timezone,
       force: req.body?.force === true,
-      reason: req.body?.reason || 'app_launch'
+      reason: req.body?.reason || 'app_launch',
+      walkingDataFinalizedUntil: req.body?.walkingDataFinalizedUntil
     });
     res.status(HTTP_STATUS.OK).json(result);
   } catch (error) {

@@ -128,8 +128,15 @@ function carbonKgFromDailyData(row) {
   return grams > 0 ? grams / 1000 : 0;
 }
 
-function calculateStreak({ rowsByDate, startDateKey, endDateKey, requiredDays }) {
-  let currentStreakDays = 0;
+function calculateStreak({
+  rowsByDate,
+  startDateKey,
+  endDateKey,
+  requiredDays,
+  initialStreakDays = 0,
+  preserveIncompleteEnd = true
+}) {
+  let currentStreakDays = initialStreakDays;
 
   for (const key of dateRange(startDateKey, endDateKey)) {
     if (isSuccessfulStreakDay(rowsByDate[key])) {
@@ -137,7 +144,7 @@ function calculateStreak({ rowsByDate, startDateKey, endDateKey, requiredDays })
       if (currentStreakDays >= requiredDays) {
         return { currentStreakDays: requiredDays, completedOn: key };
       }
-    } else if (key !== endDateKey) {
+    } else if (!preserveIncompleteEnd || key !== endDateKey) {
       currentStreakDays = 0;
     }
   }
@@ -158,8 +165,14 @@ function calculateRecordDay({ rowsByDate, startDateKey, endDateKey, requiredCarb
   };
 }
 
-function calculateMonthlyChampion({ rowsByDate, startDateKey, endDateKey, requiredCarbonKg }) {
-  let carbonKg = 0;
+function calculateMonthlyChampion({
+  rowsByDate,
+  startDateKey,
+  endDateKey,
+  requiredCarbonKg,
+  initialCarbonKg = 0
+}) {
+  let carbonKg = initialCarbonKg;
   let completedOn = null;
 
   for (const key of dateRange(startDateKey, endDateKey)) {

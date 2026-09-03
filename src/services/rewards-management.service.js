@@ -62,9 +62,19 @@ async function createReward(rewardData, createdBy) {
   // Validate required fields
   const requiredFields = ['rewardTitle', 'rewardType', 'deductPoints', 'validFrom', 'validTo'];
   for (const field of requiredFields) {
-    if (!rewardData[field]) {
+    const value = rewardData[field];
+    if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
       throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Missing required field: ${field}`);
     }
+  }
+
+  const deductPoints = Number(rewardData.deductPoints);
+  if (!Number.isFinite(deductPoints) || deductPoints < 0) {
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VALIDATION_ERROR,
+      'deductPoints must be a non-negative number'
+    );
   }
 
   // Validate reward type
@@ -98,6 +108,13 @@ async function createReward(rewardData, createdBy) {
   }
 
   if (rewardData.rewardType === 'digital_badge') {
+    if (deductPoints !== 0) {
+      throw new ApiError(
+        HTTP_STATUS.BAD_REQUEST,
+        ERROR_CODES.VALIDATION_ERROR,
+        'deductPoints must be zero for digital_badge rewards'
+      );
+    }
     if (!rewardData.badgeImageUrl) {
       throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeImageUrl is required for digital_badge type');
     }
@@ -140,7 +157,7 @@ async function createReward(rewardData, createdBy) {
     partnerId: rewardData.partnerId || null,
     
     // Points
-    deductPoints: rewardData.deductPoints,
+    deductPoints,
     
     // Coupon-specific fields
     availableCoupons: rewardData.rewardType === 'coupon' ? (rewardData.availableCoupons || rewardData.totalCoupons) : null,
@@ -253,6 +270,27 @@ async function updateReward(rewardId, updates, updatedBy) {
   }
 
   const resultingType = updates.rewardType || currentReward.rewardType;
+  if (Object.prototype.hasOwnProperty.call(updates, 'deductPoints')) {
+    const deductPoints = Number(updates.deductPoints);
+    if (!Number.isFinite(deductPoints) || deductPoints < 0) {
+      throw new ApiError(
+        HTTP_STATUS.BAD_REQUEST,
+        ERROR_CODES.VALIDATION_ERROR,
+        'deductPoints must be a non-negative number'
+      );
+    }
+    updates.deductPoints = deductPoints;
+  }
+  const resultingDeductPoints = Object.prototype.hasOwnProperty.call(updates, 'deductPoints')
+    ? updates.deductPoints
+    : Number(currentReward.deductPoints || 0);
+  if (resultingType === 'digital_badge' && resultingDeductPoints !== 0) {
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VALIDATION_ERROR,
+      'deductPoints must be zero for digital_badge rewards'
+    );
+  }
   if (resultingType === 'digital_badge' && updates.conditions) {
     validateDigitalBadgeConditions(updates.conditions);
     updates.conditions = {

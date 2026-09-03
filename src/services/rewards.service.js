@@ -155,8 +155,20 @@ function getDigitalBadgeDetails({ userId, rewardId, timeZone }) {
   return digitalBadgeService.getDigitalBadges({ userId, rewardId, timeZone });
 }
 
-function recalculateDigitalBadges({ userId, timeZone, force, reason }) {
-  return digitalBadgeService.recalculateDigitalBadges({ userId, timeZone, force, reason });
+function recalculateDigitalBadges({
+  userId,
+  timeZone,
+  force,
+  reason,
+  walkingDataFinalizedUntil
+}) {
+  return digitalBadgeService.recalculateDigitalBadges({
+    userId,
+    timeZone,
+    force,
+    reason,
+    walkingDataFinalizedUntil
+  });
 }
 
 /**

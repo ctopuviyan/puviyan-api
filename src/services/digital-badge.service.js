@@ -8,8 +8,10 @@ const {
   calculateMonthlyChampion,
   calculateRecordDay,
   calculateStreak,
+  carbonKgFromDailyData,
   dateKey,
   isAchievedVisible,
+  isSuccessfulStreakDay,
   isValidOn,
   maxDateKey,
   minDateKey,
@@ -25,6 +27,7 @@ const reconciliationInFlight = new Map();
 const definitionsCache = { rewards: null, expiresAt: 0 };
 const DEFINITION_CACHE_TTL_MS = 5 * 60 * 1000;
 const RECALCULATION_COOLDOWN_MS = 15 * 60 * 1000;
+const BADGE_CALCULATION_VERSION = 2;
 
 function iso(value) {
   return toDate(value)?.toISOString() || null;
@@ -193,25 +196,43 @@ async function getPublicAchievedDigitalBadges({ userId }) {
   };
 }
 
-async function reconcileForUser(userId, timeZone) {
+async function reconcileForUser(userId, timeZone, walkingDataFinalizedUntil) {
   const key = `${userId}:${timeZone}`;
   const existing = reconciliationInFlight.get(key);
-  if (existing) return existing;
+  if (existing) {
+    if (existing.walkingDataFinalizedUntil >= walkingDataFinalizedUntil) {
+      return existing.promise;
+    }
+    try {
+      await existing.promise;
+    } catch (_) {
+      // A newer finalized range must still be attempted after a failed run.
+    }
+    return reconcileForUser(userId, timeZone, walkingDataFinalizedUntil);
+  }
 
-  const reconciliation = performReconciliation(userId, timeZone)
-    .finally(() => reconciliationInFlight.delete(key));
-  reconciliationInFlight.set(key, reconciliation);
-  return reconciliation;
+  const entry = { walkingDataFinalizedUntil, promise: null };
+  entry.promise = performReconciliation(userId, timeZone, walkingDataFinalizedUntil)
+    .finally(() => {
+      if (reconciliationInFlight.get(key) === entry) {
+        reconciliationInFlight.delete(key);
+      }
+    });
+  reconciliationInFlight.set(key, entry);
+  return entry.promise;
 }
 
 async function readDigitalBadgeState(userId, timeZone) {
   const db = getFirestore();
   const now = new Date();
   const todayKey = dateKey(now, timeZone);
-  const [profileDoc, definitions, progressSnapshot] = await Promise.all([
+  const yesterdayKey = addDays(todayKey, -1);
+  const [profileDoc, definitions, progressSnapshot, summaryDoc, todayWalkingDoc] = await Promise.all([
     db.collection('informations').doc(userId).get(),
     loadBadgeDefinitions(),
-    db.collection('users').doc(userId).collection('badgeProgress').get()
+    db.collection('users').doc(userId).collection('badgeProgress').get(),
+    db.collection('users').doc(userId).collection('badgeState').doc('summary').get(),
+    db.collection('informations').doc(userId).collection('walking').doc(todayKey).get()
   ]);
   const profile = profileDoc.exists ? profileDoc.data() : {};
   const userOrgId = profile.orgMembership?.orgId || profile.orgId || null;
@@ -223,6 +244,23 @@ async function readDigitalBadgeState(userId, timeZone) {
     progressSnapshot.docs.map((doc) => [doc.id, normalizeProgress(doc.id, doc.data())])
   );
   const accountStartKey = await resolveAccountStartKey(userId, profile, timeZone, todayKey);
+  const walkingDataFinalizedUntil = normalizeFinalizedUntil(
+    summaryDoc.data()?.walkingDataFinalizedUntil,
+    yesterdayKey
+  ) || yesterdayKey;
+  await applyTodayPreviews({
+    db,
+    userId,
+    definitions: activeDefinitions,
+    progressMap,
+    accountStartKey,
+    todayKey,
+    timeZone,
+    now,
+    newlyAchievedRewardIds: [],
+    rowsByDate: todayWalkingDoc.exists ? { [todayKey]: todayWalkingDoc.data() } : {},
+    walkingDataFinalizedUntil
+  }, { persistAchievements: false });
   return buildBadgeStateResponse({
     definitions: activeDefinitions,
     progressMap,
@@ -230,34 +268,82 @@ async function readDigitalBadgeState(userId, timeZone) {
     todayKey,
     timeZone,
     now,
-    newlyAchievedRewardIds: []
+    newlyAchievedRewardIds: [],
+    walkingDataFinalizedUntil
   });
 }
 
-async function recalculateDigitalBadges({ userId, timeZone, force = false, reason = 'app_launch' }) {
+async function recalculateDigitalBadges({
+  userId,
+  timeZone,
+  force = false,
+  reason = 'app_launch',
+  walkingDataFinalizedUntil = null
+}) {
   const zone = normalizeTimeZone(timeZone);
+  const todayKey = dateKey(new Date(), zone);
+  const yesterdayKey = addDays(todayKey, -1);
   const summaryRef = getFirestore().collection('users').doc(userId)
     .collection('badgeState').doc('summary');
   const summaryDoc = await summaryRef.get();
-  const lastRecalculatedAt = toDate(summaryDoc.data()?.lastRecalculatedAt);
+  const summary = summaryDoc.data() || {};
+  const lastRecalculatedAt = toDate(summary.lastRecalculatedAt);
+  const requestedFinalizedUntil = normalizeFinalizedUntil(walkingDataFinalizedUntil, yesterdayKey);
+  if (walkingDataFinalizedUntil !== null && requestedFinalizedUntil === null) {
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VALIDATION_ERROR,
+      'walkingDataFinalizedUntil must use YYYY-MM-DD format'
+    );
+  }
+  const storedFinalizedUntil = normalizeFinalizedUntil(summary.walkingDataFinalizedUntil, yesterdayKey);
+  const hasExplicitFinalizedUntil = requestedFinalizedUntil !== null;
+  // Older app versions retain the previous yesterday-based behavior, but do not
+  // persist an assumed sync watermark that could overtake a later verified one.
+  const effectiveFinalizedUntil = hasExplicitFinalizedUntil
+    ? maxDateKey(storedFinalizedUntil, requestedFinalizedUntil)
+    : storedFinalizedUntil || yesterdayKey;
+  const hasNewFinalizedData = Boolean(
+    hasExplicitFinalizedUntil &&
+    effectiveFinalizedUntil &&
+    effectiveFinalizedUntil > (storedFinalizedUntil || '')
+  );
   const isCoolingDown = !force && lastRecalculatedAt &&
     Date.now() - lastRecalculatedAt.getTime() < RECALCULATION_COOLDOWN_MS &&
-    summaryDoc.data()?.timezone === zone;
+    summary.timezone === zone &&
+    summary.lastRecalculatedDate === todayKey &&
+    summary.badgeCalculationVersion === BADGE_CALCULATION_VERSION &&
+    !hasNewFinalizedData;
 
   if (isCoolingDown) {
     const result = await readDigitalBadgeState(userId, zone);
     return { ...result, recalculated: false, skippedReason: 'cooldown' };
   }
 
-  const result = await reconcileForUser(userId, zone);
-  await summaryRef.set({
+  const result = await reconcileForUser(userId, zone, effectiveFinalizedUntil);
+  const summaryUpdate = {
     lastRecalculatedAt: new Date().toISOString(),
     lastRecalculatedDate: result.serverDate,
+    badgeCalculationVersion: BADGE_CALCULATION_VERSION,
     timezone: zone,
     lastRecalculateReason: reason,
     lastUpdated: new Date().toISOString()
-  }, { merge: true });
+  };
+  if (hasExplicitFinalizedUntil || storedFinalizedUntil) {
+    summaryUpdate.walkingDataFinalizedUntil = maxDateKey(
+      effectiveFinalizedUntil,
+      result.walkingDataFinalizedUntil
+    );
+  }
+  await summaryRef.set(summaryUpdate, { merge: true });
   return { ...result, recalculated: true };
+}
+
+function normalizeFinalizedUntil(value, latestAllowedKey) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return null;
+  return minDateKey(value, latestAllowedKey);
 }
 
 async function loadBadgeDefinitions() {
@@ -272,7 +358,7 @@ async function loadBadgeDefinitions() {
   return definitionsCache.rewards;
 }
 
-async function performReconciliation(userId, timeZone) {
+async function performReconciliation(userId, timeZone, walkingDataFinalizedUntil) {
   const db = getFirestore();
   const now = new Date();
   const todayKey = dateKey(now, timeZone);
@@ -294,39 +380,42 @@ async function performReconciliation(userId, timeZone) {
   );
   const accountStartKey = await resolveAccountStartKey(userId, profile, timeZone, todayKey);
   const newlyAchievedRewardIds = [];
+  const walkingQueryStart = earliestRequiredWalkingDate({
+    definitions: activeDefinitions,
+    progressMap,
+    accountStartKey,
+    todayKey,
+    timeZone
+  });
+  const yesterdayKey = addDays(todayKey, -1);
+  const walkingQueryEnd = walkingDataFinalizedUntil === yesterdayKey
+    ? todayKey
+    : walkingDataFinalizedUntil;
+  const rowsByDate = await loadWalkingRows(
+    db,
+    userId,
+    walkingQueryStart,
+    walkingQueryEnd
+  );
+  const reconciliationContext = {
+    db,
+    userId,
+    definitions: activeDefinitions,
+    progressMap,
+    accountStartKey,
+    todayKey,
+    timeZone,
+    now,
+    newlyAchievedRewardIds,
+    rowsByDate,
+    walkingDataFinalizedUntil
+  };
 
-  await reconcileStreakSeries({
-    db,
-    userId,
-    definitions: activeDefinitions,
-    progressMap,
-    accountStartKey,
-    todayKey,
-    timeZone,
-    now,
-    newlyAchievedRewardIds
-  });
-  await reconcileRecordDaySeries({
-    db,
-    userId,
-    definitions: activeDefinitions,
-    progressMap,
-    accountStartKey,
-    todayKey,
-    timeZone,
-    now,
-    newlyAchievedRewardIds
-  });
-  await reconcileMonthlyChampion({
-    db,
-    userId,
-    definitions: activeDefinitions,
-    progressMap,
-    todayKey,
-    timeZone,
-    now,
-    newlyAchievedRewardIds
-  });
+  await migrateLegacyProvisionalProgress(reconciliationContext);
+  await reconcileStreakSeries(reconciliationContext);
+  await reconcileRecordDaySeries(reconciliationContext);
+  await reconcileMonthlyChampion(reconciliationContext);
+  await applyTodayPreviews(reconciliationContext, { persistAchievements: true });
 
   return buildBadgeStateResponse({
     definitions: activeDefinitions,
@@ -335,7 +424,8 @@ async function performReconciliation(userId, timeZone) {
     todayKey,
     timeZone,
     now,
-    newlyAchievedRewardIds
+    newlyAchievedRewardIds,
+    walkingDataFinalizedUntil
   });
 }
 
@@ -346,7 +436,8 @@ function buildBadgeStateResponse({
   todayKey,
   timeZone,
   now,
-  newlyAchievedRewardIds
+  newlyAchievedRewardIds,
+  walkingDataFinalizedUntil = null
 }) {
   const selection = selectCurrentBadges({
     definitions,
@@ -380,6 +471,7 @@ function buildBadgeStateResponse({
     serverDate: todayKey,
     refreshedAt: now.toISOString(),
     timezone: timeZone,
+    walkingDataFinalizedUntil,
     activeBadgesByType,
     newlyAchievedRewardIds,
     rewards,
@@ -402,42 +494,50 @@ async function resolveAccountStartKey(userId, profile, timeZone, fallback) {
 async function reconcileStreakSeries(context) {
   const badges = orderBadges(context.definitions, BADGE_TYPES.STREAK);
   if (badges.length === 0) return;
-  const state = currentSeriesState(badges, context.progressMap, context.accountStartKey, context.timeZone);
+  const state = currentSeriesState(
+    badges,
+    context.progressMap,
+    context.accountStartKey,
+    context.timeZone
+  );
   if (state.index >= badges.length || state.startDateKey > context.todayKey) return;
-
-  const activeBadge = badges[state.index];
-  const activeProgress = context.progressMap.get(activeBadge.rewardId);
-  const lookback = Math.max(0, Number(activeBadge.conditions.requiredStreakDays || 0) - 1);
-  const cursorStart = activeProgress?.lastCalculatedUntil
-    ? addDays(activeProgress.lastCalculatedUntil, -lookback)
-    : state.startDateKey;
-  const queryStart = maxDateKey(state.startDateKey, cursorStart);
-  const rowsByDate = await loadWalkingRows(context.db, context.userId, queryStart, context.todayKey);
 
   let index = state.index;
   let startDateKey = state.startDateKey;
-  while (index < badges.length && startDateKey <= context.todayKey) {
+  while (index < badges.length && startDateKey <= context.walkingDataFinalizedUntil) {
     const badge = badges[index];
     const configuredStart = dateKey(badge.validFrom, context.timeZone);
     const configuredEnd = dateKey(badge.validTo, context.timeZone);
     const badgeStart = maxDateKey(startDateKey, configuredStart);
-    if (!badgeStart || badgeStart > context.todayKey || badgeStart > configuredEnd) break;
+    const finalizedEnd = minDateKey(context.walkingDataFinalizedUntil, configuredEnd);
+    if (!badgeStart || !finalizedEnd || badgeStart > finalizedEnd) break;
 
-    const calculationStart = index === state.index ? maxDateKey(badgeStart, queryStart) : badgeStart;
-    const result = calculateStreak({
-      rowsByDate,
-      startDateKey: calculationStart,
-      endDateKey: minDateKey(context.todayKey, configuredEnd),
-      requiredDays: Number(badge.conditions.requiredStreakDays)
-    });
     const oldProgress = context.progressMap.get(badge.rewardId);
+    const calculationStart = maxDateKey(
+      badgeStart,
+      oldProgress?.lastCalculatedUntil
+        ? addDays(oldProgress.lastCalculatedUntil, 1)
+        : badgeStart
+    );
+    if (calculationStart > finalizedEnd) break;
+
+    const result = calculateStreak({
+      rowsByDate: context.rowsByDate,
+      startDateKey: calculationStart,
+      endDateKey: finalizedEnd,
+      requiredDays: Number(badge.conditions.requiredStreakDays),
+      initialStreakDays: oldProgress?.lastCalculatedUntil
+        ? Number(oldProgress.progress?.currentStreakDays || 0)
+        : 0,
+      preserveIncompleteEnd: false
+    });
     const progress = buildProgress({
       reward: badge,
       oldProgress,
       progress: { currentStreakDays: result.currentStreakDays },
       completedOn: result.completedOn,
       progressStartDate: badgeStart,
-      lastCalculatedUntil: addDays(context.todayKey, -1),
+      lastCalculatedUntil: result.completedOn || finalizedEnd,
       now: context.now
     });
     const newlyAchieved = !oldProgress?.isAchieved && progress.isAchieved;
@@ -460,37 +560,42 @@ async function reconcileRecordDaySeries(context) {
   const state = currentSeriesState(badges, context.progressMap, context.accountStartKey, context.timeZone);
   if (state.index >= badges.length || state.startDateKey > context.todayKey) return;
 
-  const activeProgress = context.progressMap.get(badges[state.index].rewardId);
-  const cursorStart = activeProgress?.lastCalculatedUntil
-    ? addDays(activeProgress.lastCalculatedUntil, 1)
-    : state.startDateKey;
-  const queryStart = maxDateKey(state.startDateKey, cursorStart);
-  const rowsByDate = await loadWalkingRows(context.db, context.userId, queryStart, context.todayKey);
-
   let index = state.index;
   let startDateKey = state.startDateKey;
-  while (index < badges.length && startDateKey <= context.todayKey) {
+  while (index < badges.length && startDateKey <= context.walkingDataFinalizedUntil) {
     const badge = badges[index];
     const configuredStart = dateKey(badge.validFrom, context.timeZone);
     const configuredEnd = dateKey(badge.validTo, context.timeZone);
     const badgeStart = maxDateKey(startDateKey, configuredStart);
-    if (!badgeStart || badgeStart > context.todayKey || badgeStart > configuredEnd) break;
+    const finalizedEnd = minDateKey(context.walkingDataFinalizedUntil, configuredEnd);
+    if (!badgeStart || !finalizedEnd || badgeStart > finalizedEnd) break;
 
-    const calculationStart = index === state.index ? maxDateKey(badgeStart, queryStart) : badgeStart;
+    const oldProgress = context.progressMap.get(badge.rewardId);
+    const calculationStart = maxDateKey(
+      badgeStart,
+      oldProgress?.lastCalculatedUntil
+        ? addDays(oldProgress.lastCalculatedUntil, 1)
+        : badgeStart
+    );
+    if (calculationStart > finalizedEnd) break;
+
     const result = calculateRecordDay({
-      rowsByDate,
+      rowsByDate: context.rowsByDate,
       startDateKey: calculationStart,
-      endDateKey: minDateKey(context.todayKey, configuredEnd),
+      endDateKey: finalizedEnd,
       requiredCarbonKg: Number(badge.conditions.requiredRecordDayCarbonKg)
     });
-    const oldProgress = context.progressMap.get(badge.rewardId);
     const progress = buildProgress({
       reward: badge,
       oldProgress,
-      progress: { currentRecordDayCarbonKg: result.currentCarbonKg },
+      progress: {
+        currentRecordDayCarbonKg: result.completedOn
+          ? result.currentCarbonKg
+          : 0
+      },
       completedOn: result.completedOn,
       progressStartDate: badgeStart,
-      lastCalculatedUntil: addDays(context.todayKey, -1),
+      lastCalculatedUntil: result.completedOn || finalizedEnd,
       now: context.now
     });
     const newlyAchieved = !oldProgress?.isAchieved && progress.isAchieved;
@@ -508,33 +613,277 @@ async function reconcileRecordDaySeries(context) {
 }
 
 async function reconcileMonthlyChampion(context) {
-  const badge = selectCurrentMonthlyBadge(context.definitions, context.todayKey, context.timeZone);
+  const badges = orderBadges(context.definitions, BADGE_TYPES.MONTHLY_CHAMPION);
+  for (const badge of badges) {
+    const oldProgress = context.progressMap.get(badge.rewardId);
+    if (oldProgress?.isAchieved) continue;
+
+    const startDateKey = maxDateKey(
+      dateKey(badge.validFrom, context.timeZone),
+      context.accountStartKey
+    );
+    const endDateKey = minDateKey(
+      context.walkingDataFinalizedUntil,
+      dateKey(badge.validTo, context.timeZone)
+    );
+    const calculationStart = maxDateKey(
+      startDateKey,
+      oldProgress?.lastCalculatedUntil
+        ? addDays(oldProgress.lastCalculatedUntil, 1)
+        : startDateKey
+    );
+    if (!endDateKey || calculationStart > endDateKey) continue;
+
+    const result = calculateMonthlyChampion({
+      rowsByDate: context.rowsByDate,
+      startDateKey: calculationStart,
+      endDateKey,
+      requiredCarbonKg: Number(badge.conditions.requiredChampionCarbonKg),
+      initialCarbonKg: oldProgress?.lastCalculatedUntil
+        ? Number(oldProgress.progress?.currentChampionCarbonKg || 0)
+        : 0
+    });
+    const progress = buildProgress({
+      reward: badge,
+      oldProgress,
+      progress: { currentChampionCarbonKg: result.carbonKg },
+      completedOn: result.completedOn,
+      progressStartDate: startDateKey,
+      lastCalculatedUntil: result.completedOn || endDateKey,
+      now: context.now
+    });
+    const newlyAchieved = !oldProgress?.isAchieved && progress.isAchieved;
+    await persistProgress(context.db, context.userId, badge, oldProgress, progress);
+    context.progressMap.set(badge.rewardId, progress);
+    if (newlyAchieved) {
+      context.newlyAchievedRewardIds.push(badge.rewardId);
+    }
+  }
+}
+
+async function migrateLegacyProvisionalProgress(context) {
+  for (const reward of context.definitions) {
+    const previous = context.progressMap.get(reward.rewardId);
+    if (
+      !previous ||
+      previous.isAchieved ||
+      previous.calculationVersion >= BADGE_CALCULATION_VERSION ||
+      !previous.lastCalculatedUntil
+    ) {
+      continue;
+    }
+
+    const provisionalDate = addDays(previous.lastCalculatedUntil, 1);
+    const provisionalRow = context.rowsByDate[provisionalDate];
+    let progress;
+    switch (badgeType(reward)) {
+      case BADGE_TYPES.STREAK: {
+        const current = Number(previous.progress?.currentStreakDays || 0);
+        progress = {
+          currentStreakDays: isSuccessfulStreakDay(provisionalRow)
+            ? Math.max(0, current - 1)
+            : current
+        };
+        break;
+      }
+      case BADGE_TYPES.RECORD_DAY:
+        progress = { currentRecordDayCarbonKg: 0 };
+        break;
+      case BADGE_TYPES.MONTHLY_CHAMPION: {
+        const current = Number(previous.progress?.currentChampionCarbonKg || 0);
+        progress = {
+          currentChampionCarbonKg: Math.max(
+            0,
+            current - carbonKgFromDailyData(provisionalRow)
+          )
+        };
+        break;
+      }
+      default:
+        continue;
+    }
+
+    const migrated = {
+      ...previous,
+      progress,
+      calculationVersion: BADGE_CALCULATION_VERSION,
+      lastUpdated: context.now.toISOString()
+    };
+    await persistProgress(context.db, context.userId, reward, previous, migrated);
+    context.progressMap.set(reward.rewardId, migrated);
+  }
+}
+
+function earliestRequiredWalkingDate({
+  definitions,
+  progressMap,
+  accountStartKey,
+  todayKey,
+  timeZone
+}) {
+  const starts = [];
+  for (const type of [BADGE_TYPES.STREAK, BADGE_TYPES.RECORD_DAY]) {
+    const badges = orderBadges(definitions, type);
+    const state = currentSeriesState(badges, progressMap, accountStartKey, timeZone);
+    if (state.index >= badges.length) continue;
+    const badge = badges[state.index];
+    const progress = progressMap.get(badge.rewardId);
+    const periodEnd = minDateKey(todayKey, dateKey(badge.validTo, timeZone));
+    const start = maxDateKey(
+      state.startDateKey,
+      dateKey(badge.validFrom, timeZone),
+      progress?.lastCalculatedUntil ? addDays(progress.lastCalculatedUntil, 1) : null
+    );
+    if (start && periodEnd && start <= periodEnd) starts.push(start);
+  }
+
+  for (const monthly of orderBadges(definitions, BADGE_TYPES.MONTHLY_CHAMPION)) {
+    const progress = progressMap.get(monthly.rewardId);
+    if (progress?.isAchieved) continue;
+    const periodEnd = dateKey(monthly.validTo, timeZone);
+    if (periodEnd < accountStartKey) continue;
+    const start = maxDateKey(
+      dateKey(monthly.validFrom, timeZone),
+      accountStartKey,
+      progress?.lastCalculatedUntil ? addDays(progress.lastCalculatedUntil, 1) : null
+    );
+    if (start && start <= minDateKey(todayKey, periodEnd)) starts.push(start);
+  }
+
+  return starts.length === 0 ? null : starts.sort()[0];
+}
+
+async function applyTodayPreviews(context, { persistAchievements }) {
+  if (context.walkingDataFinalizedUntil !== addDays(context.todayKey, -1)) return;
+  await applyTodayStreakPreview(context, persistAchievements);
+  await applyTodayRecordDayPreview(context, persistAchievements);
+  await applyTodayMonthlyPreview(context, persistAchievements);
+}
+
+async function applyTodayStreakPreview(context, persistAchievements) {
+  const badges = orderBadges(context.definitions, BADGE_TYPES.STREAK);
+  const state = currentSeriesState(
+    badges,
+    context.progressMap,
+    context.accountStartKey,
+    context.timeZone
+  );
+  if (state.index >= badges.length || state.startDateKey > context.todayKey) return;
+
+  const badge = badges[state.index];
+  if (!isValidOn(badge, context.todayKey, context.timeZone)) return;
+  const oldProgress = context.progressMap.get(badge.rewardId);
+  const current = Number(oldProgress?.progress?.currentStreakDays || 0);
+  const successfulToday = Boolean(context.rowsByDate[context.todayKey]) &&
+    calculateStreak({
+      rowsByDate: context.rowsByDate,
+      startDateKey: context.todayKey,
+      endDateKey: context.todayKey,
+      requiredDays: 1
+    }).currentStreakDays === 1;
+  const requiredDays = Number(badge.conditions.requiredStreakDays);
+  const liveStreak = Math.min(requiredDays, current + (successfulToday ? 1 : 0));
+  const completedOn = liveStreak >= requiredDays ? context.todayKey : null;
+  const progress = buildProgress({
+    reward: badge,
+    oldProgress,
+    progress: { currentStreakDays: liveStreak },
+    completedOn: persistAchievements ? completedOn : null,
+    progressStartDate: state.startDateKey,
+    lastCalculatedUntil: oldProgress?.lastCalculatedUntil,
+    now: context.now
+  });
+  await applyPreviewProgress(context, badge, oldProgress, progress, completedOn, persistAchievements);
+}
+
+async function applyTodayRecordDayPreview(context, persistAchievements) {
+  const badges = orderBadges(context.definitions, BADGE_TYPES.RECORD_DAY);
+  const state = currentSeriesState(
+    badges,
+    context.progressMap,
+    context.accountStartKey,
+    context.timeZone
+  );
+  if (state.index >= badges.length || state.startDateKey > context.todayKey) return;
+
+  const badge = badges[state.index];
+  if (!isValidOn(badge, context.todayKey, context.timeZone)) return;
+  const oldProgress = context.progressMap.get(badge.rewardId);
+  const result = calculateRecordDay({
+    rowsByDate: context.rowsByDate,
+    startDateKey: context.todayKey,
+    endDateKey: context.todayKey,
+    requiredCarbonKg: Number(badge.conditions.requiredRecordDayCarbonKg)
+  });
+  const progress = buildProgress({
+    reward: badge,
+    oldProgress,
+    progress: { currentRecordDayCarbonKg: result.currentCarbonKg },
+    completedOn: persistAchievements ? result.completedOn : null,
+    progressStartDate: state.startDateKey,
+    lastCalculatedUntil: oldProgress?.lastCalculatedUntil,
+    now: context.now
+  });
+  await applyPreviewProgress(
+    context,
+    badge,
+    oldProgress,
+    progress,
+    result.completedOn,
+    persistAchievements
+  );
+}
+
+async function applyTodayMonthlyPreview(context, persistAchievements) {
+  const badge = selectCurrentMonthlyBadge(
+    context.definitions,
+    context.todayKey,
+    context.timeZone
+  );
   if (!badge) return;
   const oldProgress = context.progressMap.get(badge.rewardId);
   if (oldProgress?.isAchieved) return;
 
-  const startDateKey = dateKey(badge.validFrom, context.timeZone);
-  const endDateKey = minDateKey(context.todayKey, dateKey(badge.validTo, context.timeZone));
-  const rowsByDate = await loadWalkingRows(context.db, context.userId, startDateKey, endDateKey);
+  const baseCarbonKg = Number(oldProgress?.progress?.currentChampionCarbonKg || 0);
   const result = calculateMonthlyChampion({
-    rowsByDate,
-    startDateKey,
-    endDateKey,
-    requiredCarbonKg: Number(badge.conditions.requiredChampionCarbonKg)
+    rowsByDate: context.rowsByDate,
+    startDateKey: context.todayKey,
+    endDateKey: context.todayKey,
+    requiredCarbonKg: Number(badge.conditions.requiredChampionCarbonKg),
+    initialCarbonKg: baseCarbonKg
   });
   const progress = buildProgress({
     reward: badge,
     oldProgress,
     progress: { currentChampionCarbonKg: result.carbonKg },
-    completedOn: result.completedOn,
+    completedOn: persistAchievements ? result.completedOn : null,
+    progressStartDate: dateKey(badge.validFrom, context.timeZone),
+    lastCalculatedUntil: oldProgress?.lastCalculatedUntil,
     now: context.now
   });
-  const newlyAchieved = !oldProgress?.isAchieved && progress.isAchieved;
-  await persistProgress(context.db, context.userId, badge, oldProgress, progress);
-  context.progressMap.set(badge.rewardId, progress);
-  if (newlyAchieved) {
+  await applyPreviewProgress(
+    context,
+    badge,
+    oldProgress,
+    progress,
+    result.completedOn,
+    persistAchievements
+  );
+}
+
+async function applyPreviewProgress(
+  context,
+  badge,
+  oldProgress,
+  progress,
+  completedOn,
+  persistAchievements
+) {
+  if (persistAchievements && completedOn) {
+    await persistProgress(context.db, context.userId, badge, oldProgress, progress);
     context.newlyAchievedRewardIds.push(badge.rewardId);
   }
+  context.progressMap.set(badge.rewardId, progress);
 }
 
 function currentSeriesState(badges, progressMap, accountStartKey, timeZone) {
@@ -576,6 +925,7 @@ function buildProgress({
     isAchieved: achieved,
     completedOn: completedOn || null,
     detectedAt: achieved ? detectionTime : null,
+    calculationVersion: BADGE_CALCULATION_VERSION,
     lastUpdated: now.toISOString()
   };
   if (progressStartDate) result.progressStartDate = progressStartDate;
@@ -598,6 +948,7 @@ function normalizeProgress(rewardId, data) {
     progressStartDate: data.progressStartDate || null,
     completedOn: data.completedOn || null,
     detectedAt: iso(data.detectedAt || data.achievedAt),
+    calculationVersion: Number(data.calculationVersion || 1),
     lastCalculatedUntil: data.lastCalculatedUntil || null,
     lastUpdated: iso(data.lastUpdated) || new Date(0).toISOString(),
     rewardSnapshot: data.rewardSnapshot || {
@@ -630,7 +981,7 @@ async function persistProgress(db, userId, reward, previous, progress) {
 function samePersistedProgress(a, b) {
   const keys = [
     'rewardId', 'badgeType', 'isAchieved', 'progressStartDate', 'completedOn',
-    'detectedAt', 'lastCalculatedUntil'
+    'detectedAt', 'lastCalculatedUntil', 'calculationVersion'
   ];
   return keys.every((key) => (a[key] ?? null) === (b[key] ?? null)) &&
     JSON.stringify(a.progress || {}) === JSON.stringify(b.progress || {});
