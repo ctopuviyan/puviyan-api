@@ -893,8 +893,7 @@ function currentSeriesState(badges, progressMap, accountStartKey, timeZone) {
     const badge = badges[index];
     const progress = progressMap.get(badge.rewardId);
     if (!progress?.isAchieved) break;
-    const completedOn = progress.completedOn ||
-      (progress.detectedAt ? dateKey(progress.detectedAt, timeZone) : null);
+    const completedOn = completedDateKey(progress, badge, timeZone);
     if (completedOn) startDateKey = addDays(completedOn, 1);
     index += 1;
   }
@@ -904,6 +903,30 @@ function currentSeriesState(badges, progressMap, accountStartKey, timeZone) {
     startDateKey = maxDateKey(startDateKey, existingStart, configuredStart);
   }
   return { index, startDateKey };
+}
+
+function completedDateKey(progress, badge, timeZone) {
+  if (progress.completedOn) {
+    if (typeof progress.completedOn === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(progress.completedOn)) {
+      return progress.completedOn;
+    }
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VAL_INVALID_FORMAT,
+      `Invalid badge progress completedOn date for reward ${badge.rewardId}. Expected YYYY-MM-DD.`
+    );
+  }
+
+  if (!progress.detectedAt) return null;
+  const detectedAt = toDate(progress.detectedAt);
+  if (!detectedAt) {
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VAL_INVALID_FORMAT,
+      `Invalid badge progress detectedAt date for reward ${badge.rewardId}. Expected a valid timestamp.`
+    );
+  }
+  return dateKey(detectedAt, timeZone);
 }
 
 function buildProgress({
