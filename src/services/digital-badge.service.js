@@ -292,7 +292,7 @@ async function recalculateDigitalBadges({
   if (walkingDataFinalizedUntil !== null && requestedFinalizedUntil === null) {
     throw new ApiError(
       HTTP_STATUS.BAD_REQUEST,
-      ERROR_CODES.VALIDATION_ERROR,
+      ERROR_CODES.VAL_INVALID_FORMAT,
       'walkingDataFinalizedUntil must use YYYY-MM-DD format'
     );
   }
@@ -907,7 +907,7 @@ function currentSeriesState(badges, progressMap, accountStartKey, timeZone) {
 
 function completedDateKey(progress, badge, timeZone) {
   if (progress.completedOn) {
-    if (typeof progress.completedOn === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(progress.completedOn)) {
+    if (isValidDateKey(progress.completedOn)) {
       return progress.completedOn;
     }
     throw new ApiError(
@@ -917,7 +917,13 @@ function completedDateKey(progress, badge, timeZone) {
     );
   }
 
-  if (!progress.detectedAt) return null;
+  if (!progress.detectedAt) {
+    throw new ApiError(
+      HTTP_STATUS.BAD_REQUEST,
+      ERROR_CODES.VAL_INVALID_FORMAT,
+      `Missing badge progress completedOn date for reward ${badge.rewardId}. Expected completedOn YYYY-MM-DD or a valid detectedAt timestamp.`
+    );
+  }
   const detectedAt = toDate(progress.detectedAt);
   if (!detectedAt) {
     throw new ApiError(
@@ -927,6 +933,12 @@ function completedDateKey(progress, badge, timeZone) {
     );
   }
   return dateKey(detectedAt, timeZone);
+}
+
+function isValidDateKey(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function buildProgress({
