@@ -142,8 +142,8 @@ async function getAchievedDigitalBadges({ userId, timeZone }) {
     })
     .filter(Boolean)
     .sort((a, b) => {
-      const aTime = toDate(a.badgeProgress.detectedAt)?.getTime() || 0;
-      const bTime = toDate(b.badgeProgress.detectedAt)?.getTime() || 0;
+      const aTime = toDate(a.badgeProgress.achievedAt)?.getTime() || 0;
+      const bTime = toDate(b.badgeProgress.achievedAt)?.getTime() || 0;
       return bTime - aTime;
     });
 
@@ -179,7 +179,7 @@ async function getPublicAchievedDigitalBadges({ userId }) {
         badgeName: snapshot.badgeName || '',
         badgeDescription: snapshot.badgeDescription || null,
         badgeImageUrl: snapshot.badgeImageUrl || '',
-        achievedAt: progress.detectedAt
+        achievedAt: progress.achievedAt
       };
     })
     .sort((a, b) => {
@@ -917,22 +917,22 @@ function completedDateKey(progress, badge, timeZone) {
     );
   }
 
-  if (!progress.detectedAt) {
+  if (!progress.achievedAt) {
     throw new ApiError(
       HTTP_STATUS.BAD_REQUEST,
       ERROR_CODES.VAL_INVALID_FORMAT,
-      `Missing badge progress completedOn date for reward ${badge.rewardId}. Expected completedOn YYYY-MM-DD or a valid detectedAt timestamp.`
+      `Missing badge progress completedOn date for reward ${badge.rewardId}. Expected completedOn YYYY-MM-DD or a valid achievedAt timestamp.`
     );
   }
-  const detectedAt = toDate(progress.detectedAt);
-  if (!detectedAt) {
+  const achievedAt = toDate(progress.achievedAt);
+  if (!achievedAt) {
     throw new ApiError(
       HTTP_STATUS.BAD_REQUEST,
       ERROR_CODES.VAL_INVALID_FORMAT,
-      `Invalid badge progress detectedAt date for reward ${badge.rewardId}. Expected a valid timestamp.`
+      `Invalid badge progress achievedAt date for reward ${badge.rewardId}. Expected a valid timestamp.`
     );
   }
-  return dateKey(detectedAt, timeZone);
+  return dateKey(achievedAt, timeZone);
 }
 
 function isValidDateKey(value) {
@@ -952,14 +952,14 @@ function buildProgress({
 }) {
   if (oldProgress?.isAchieved) return oldProgress;
   const achieved = Boolean(completedOn);
-  const detectionTime = achieved ? now.toISOString() : null;
+  const achievementTime = achieved ? now.toISOString() : null;
   const result = {
     rewardId: reward.rewardId,
     badgeType: badgeType(reward),
     progress,
     isAchieved: achieved,
     completedOn: completedOn || null,
-    detectedAt: achieved ? detectionTime : null,
+    achievedAt: achieved ? achievementTime : null,
     calculationVersion: BADGE_CALCULATION_VERSION,
     lastUpdated: now.toISOString()
   };
@@ -982,7 +982,7 @@ function normalizeProgress(rewardId, data) {
     isAchieved: data.isAchieved === true,
     progressStartDate: data.progressStartDate || null,
     completedOn: data.completedOn || null,
-    detectedAt: iso(data.detectedAt || data.achievedAt),
+    achievedAt: iso(data.achievedAt),
     calculationVersion: Number(data.calculationVersion || 1),
     lastCalculatedUntil: data.lastCalculatedUntil || null,
     lastUpdated: iso(data.lastUpdated) || new Date(0).toISOString(),
@@ -1016,7 +1016,7 @@ async function persistProgress(db, userId, reward, previous, progress) {
 function samePersistedProgress(a, b) {
   const keys = [
     'rewardId', 'badgeType', 'isAchieved', 'progressStartDate', 'completedOn',
-    'detectedAt', 'lastCalculatedUntil', 'calculationVersion'
+    'achievedAt', 'lastCalculatedUntil', 'calculationVersion'
   ];
   return keys.every((key) => (a[key] ?? null) === (b[key] ?? null)) &&
     JSON.stringify(a.progress || {}) === JSON.stringify(b.progress || {});
@@ -1103,5 +1103,8 @@ module.exports = {
   recalculateDigitalBadges,
   reconcileForUser,
   serializeReward,
-  samePersistedProgress
+  samePersistedProgress,
+  __test__: {
+    normalizeProgress
+  }
 };

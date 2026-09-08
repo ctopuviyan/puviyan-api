@@ -188,9 +188,9 @@ function calculateMonthlyChampion({
 
 function isAchievedVisible(progress, now = new Date()) {
   if (!progress?.isAchieved) return false;
-  const detected = toDate(progress.detectedAt || progress.achievedAt);
-  if (!detected) return false;
-  return now.getTime() < detected.getTime() + ACHIEVED_VISIBILITY_DAYS * 86400000;
+  const achievedAt = toDate(progress.achievedAt);
+  if (!achievedAt) return false;
+  return now.getTime() < achievedAt.getTime() + ACHIEVED_VISIBILITY_DAYS * 86400000;
 }
 
 function validateConditions(conditions) {
