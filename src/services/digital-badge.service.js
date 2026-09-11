@@ -28,6 +28,7 @@ const definitionsCache = { rewards: null, expiresAt: 0 };
 const DEFINITION_CACHE_TTL_MS = 5 * 60 * 1000;
 const RECALCULATION_COOLDOWN_MS = 15 * 60 * 1000;
 const BADGE_CALCULATION_VERSION = 2;
+const DIGITAL_BADGE_REWARD_TYPES = ['digital_badge', 'digital_badge_v2'];
 
 function iso(value) {
   return toDate(value)?.toISOString() || null;
@@ -40,7 +41,9 @@ function serializeReward(reward) {
     rewardId: reward.rewardId,
     rewardTitle: reward.rewardTitle || '',
     rewardSubtitle: reward.rewardSubtitle || '',
-    rewardType: reward.rewardType,
+    // The dedicated endpoint presents both stored badge types through the
+    // contract already understood by the updated Flutter app.
+    rewardType: 'digital_badge',
     rewardDetails: reward.rewardDetails || [],
     brandName: reward.brandName || null,
     deductPoints: Number(reward.deductPoints || 0),
@@ -101,12 +104,17 @@ async function getAchievedDigitalBadges({ userId, timeZone }) {
 
   const zone = normalizeTimeZone(timeZone);
   const db = getFirestore();
-  const [profileDoc, definitions, progressSnapshot] = await Promise.all([
+  const progressCollection = db.collection('users').doc(userId).collection('badgeProgress');
+  const [profileDoc, definitions, legacyProgressSnapshot, v2ProgressSnapshot] = await Promise.all([
     db.collection('informations').doc(userId).get(),
     loadBadgeDefinitions(),
-    db.collection('users').doc(userId).collection('badgeProgress')
-      .where('isAchieved', '==', true).get()
+    progressCollection.where('isAchieved', '==', true).get(),
+    progressCollection.where('v2.isAchieved', '==', true).get()
   ]);
+  const progressDocs = [...new Map(
+    [...legacyProgressSnapshot.docs, ...v2ProgressSnapshot.docs]
+      .map((doc) => [doc.id, doc])
+  ).values()];
 
   const profile = profileDoc.exists ? profileDoc.data() : {};
   const userOrgId = profile.orgMembership?.orgId || profile.orgId || null;
@@ -117,9 +125,10 @@ async function getAchievedDigitalBadges({ userId, timeZone }) {
     visibleDefinitions.map((reward) => [reward.rewardId, reward])
   );
 
-  const rewards = progressSnapshot.docs
+  const rewards = progressDocs
     .map((doc) => {
       const progress = normalizeProgress(doc.id, doc.data());
+      if (!progress.isAchieved) return null;
       const definition = definitionsById.get(doc.id);
       const ordered = definition ? orderBadges(visibleDefinitions, badgeType(definition)) : [];
       const index = definition ? ordered.findIndex((item) => item.rewardId === definition.rewardId) : null;
@@ -166,11 +175,20 @@ async function getPublicAchievedDigitalBadges({ userId }) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VAL_INVALID_VALUE, 'A profile user ID is required');
   }
 
-  const progressSnapshot = await getFirestore().collection('users').doc(userId)
-    .collection('badgeProgress').where('isAchieved', '==', true).get();
-  const badges = progressSnapshot.docs
+  const progressCollection = getFirestore().collection('users').doc(userId)
+    .collection('badgeProgress');
+  const [legacyProgressSnapshot, v2ProgressSnapshot] = await Promise.all([
+    progressCollection.where('isAchieved', '==', true).get(),
+    progressCollection.where('v2.isAchieved', '==', true).get()
+  ]);
+  const progressDocs = [...new Map(
+    [...legacyProgressSnapshot.docs, ...v2ProgressSnapshot.docs]
+      .map((doc) => [doc.id, doc])
+  ).values()];
+  const badges = progressDocs
     .map((doc) => {
       const progress = normalizeProgress(doc.id, doc.data());
+      if (!progress.isAchieved) return null;
       const snapshot = progress.rewardSnapshot || {};
       return {
         rewardId: progress.rewardId,
@@ -182,6 +200,7 @@ async function getPublicAchievedDigitalBadges({ userId }) {
         achievedAt: progress.achievedAt
       };
     })
+    .filter(Boolean)
     .sort((a, b) => {
       const aTime = toDate(a.achievedAt)?.getTime() || 0;
       const bTime = toDate(b.achievedAt)?.getTime() || 0;
@@ -352,7 +371,7 @@ async function loadBadgeDefinitions() {
     return definitionsCache.rewards;
   }
   const snapshot = await getFirestore().collection('rewards')
-    .where('rewardType', '==', 'digital_badge').get();
+    .where('rewardType', 'in', DIGITAL_BADGE_REWARD_TYPES).get();
   definitionsCache.rewards = snapshot.docs.map((doc) => ({ rewardId: doc.id, ...doc.data() }));
   definitionsCache.expiresAt = now + DEFINITION_CACHE_TTL_MS;
   return definitionsCache.rewards;
@@ -969,24 +988,33 @@ function buildProgress({
 }
 
 function normalizeProgress(rewardId, data) {
-  const type = data.badgeType || null;
+  const stored = data?.v2 && typeof data.v2 === 'object' ? data.v2 : data;
+  const type = stored.badgeType || data.badgeType || null;
   const legacyProgress = type === BADGE_TYPES.STREAK
-    ? { currentStreakDays: Number(data.currentStreakDays || 0) }
+    ? { currentStreakDays: Number(stored.currentStreakDays || 0) }
     : type === BADGE_TYPES.RECORD_DAY
-      ? { currentRecordDayCarbonKg: Number(data.currentRecordDayCarbonKg || 0) }
-      : { currentChampionCarbonKg: Number(data.currentChampionCarbonKg || 0) };
+      ? { currentRecordDayCarbonKg: Number(stored.currentRecordDayCarbonKg || 0) }
+      : { currentChampionCarbonKg: Number(stored.currentChampionCarbonKg || 0) };
+  const hasLegacyFlatProgress = !data?.v2 && [
+    'currentStreakDays',
+    'currentRecordDayCarbonKg',
+    'currentChampionCarbonKg'
+  ].some((key) => Object.prototype.hasOwnProperty.call(data, key));
   return {
     rewardId,
     badgeType: type,
-    progress: data.progress || legacyProgress,
-    isAchieved: data.isAchieved === true,
-    progressStartDate: data.progressStartDate || null,
-    completedOn: data.completedOn || null,
-    achievedAt: iso(data.achievedAt),
-    calculationVersion: Number(data.calculationVersion || 1),
-    lastCalculatedUntil: data.lastCalculatedUntil || null,
-    lastUpdated: iso(data.lastUpdated) || new Date(0).toISOString(),
-    rewardSnapshot: data.rewardSnapshot || {
+    // Released app versions update the flat numeric fields with merge writes.
+    // Prefer them when present so a stale server progress map cannot mask a
+    // newer legacy-client update.
+    progress: hasLegacyFlatProgress ? legacyProgress : stored.progress || legacyProgress,
+    isAchieved: stored.isAchieved === true,
+    progressStartDate: stored.progressStartDate || null,
+    completedOn: stored.completedOn || null,
+    achievedAt: iso(stored.achievedAt),
+    calculationVersion: Number(stored.calculationVersion || 1),
+    lastCalculatedUntil: stored.lastCalculatedUntil || null,
+    lastUpdated: iso(stored.lastUpdated) || new Date(0).toISOString(),
+    rewardSnapshot: stored.rewardSnapshot || data.rewardSnapshot || {
       rewardTitle: data.rewardTitle || '',
       rewardSubtitle: data.rewardSubtitle || '',
       badgeName: data.badgeName || '',
@@ -1008,8 +1036,27 @@ async function persistProgress(db, userId, reward, previous, progress) {
       badgeImageUrl: reward.badgeImageUrl || ''
     }
   };
-  await db.collection('users').doc(userId).collection('badgeProgress')
-    .doc(reward.rewardId).set(data, { merge: true });
+  const progressRef = db.collection('users').doc(userId).collection('badgeProgress')
+    .doc(reward.rewardId);
+  if (reward.rewardType === 'digital_badge_v2') {
+    await progressRef.set({
+      rewardId: reward.rewardId,
+      rewardType: reward.rewardType,
+      badgeType: badgeType(reward),
+      schemaVersion: BADGE_CALCULATION_VERSION,
+      v2: data,
+      lastUpdated: progress.lastUpdated
+    }, { merge: true });
+  } else {
+    // Preserve the legacy document shape for released app versions while the
+    // updated API also consumes the normalized progress map.
+    await progressRef.set({
+      ...data,
+      currentStreakDays: Number(data.progress?.currentStreakDays || 0),
+      currentChampionCarbonKg: Number(data.progress?.currentChampionCarbonKg || 0),
+      currentRecordDayCarbonKg: Number(data.progress?.currentRecordDayCarbonKg || 0)
+    }, { merge: true });
+  }
   return true;
 }
 
@@ -1053,9 +1100,10 @@ function selectCurrentBadges({ definitions, progressMap, accountStartKey, todayK
   for (const type of [BADGE_TYPES.STREAK, BADGE_TYPES.RECORD_DAY]) {
     const badges = orderBadges(definitions, type);
     const state = currentSeriesState(badges, progressMap, accountStartKey, timeZone);
-    const badge = state.index < badges.length && state.startDateKey <= todayKey
-      ? badges[state.index]
-      : null;
+    // Reveal the next badge as soon as the previous one is achieved. Its
+    // progress still starts on state.startDateKey, so today's activity is not
+    // counted twice across consecutive badges.
+    const badge = state.index < badges.length ? badges[state.index] : null;
     result.set(type, badge && isValidOn(badge, todayKey, timeZone) ? badge.rewardId : null);
   }
   result.set(
@@ -1105,6 +1153,9 @@ module.exports = {
   serializeReward,
   samePersistedProgress,
   __test__: {
-    normalizeProgress
+    loadBadgeDefinitions,
+    normalizeProgress,
+    persistProgress,
+    selectCurrentBadges
   }
 };

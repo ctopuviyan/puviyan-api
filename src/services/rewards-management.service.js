@@ -3,6 +3,19 @@ const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 const { ApiError } = require('../middleware/error.middleware');
 
 const DIGITAL_BADGE_TYPES = ['puviStreaker', 'recordDay', 'carbonImpactChampion'];
+const DIGITAL_BADGE_REWARD_TYPES = ['digital_badge', 'digital_badge_v2'];
+const VALID_REWARD_TYPES = [
+  'coupon',
+  'percent_off',
+  'amount_off',
+  ...DIGITAL_BADGE_REWARD_TYPES,
+  'meal_coupon',
+  'email_approval'
+];
+
+function isDigitalBadgeRewardType(rewardType) {
+  return DIGITAL_BADGE_REWARD_TYPES.includes(rewardType);
+}
 
 /**
  * Rewards Management Service - CRUD operations for rewards
@@ -78,9 +91,8 @@ async function createReward(rewardData, createdBy) {
   }
 
   // Validate reward type
-  const validTypes = ['coupon', 'percent_off', 'amount_off', 'digital_badge', 'meal_coupon', 'email_approval'];
-  if (!validTypes.includes(rewardData.rewardType)) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid rewardType. Must be one of: ${validTypes.join(', ')}`);
+  if (!VALID_REWARD_TYPES.includes(rewardData.rewardType)) {
+    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid rewardType. Must be one of: ${VALID_REWARD_TYPES.join(', ')}`);
   }
 
   // Validate brandName only for types that need it
@@ -107,19 +119,19 @@ async function createReward(rewardData, createdBy) {
     }
   }
 
-  if (rewardData.rewardType === 'digital_badge') {
+  if (isDigitalBadgeRewardType(rewardData.rewardType)) {
     if (deductPoints !== 0) {
       throw new ApiError(
         HTTP_STATUS.BAD_REQUEST,
         ERROR_CODES.VALIDATION_ERROR,
-        'deductPoints must be zero for digital_badge rewards'
+        'deductPoints must be zero for digital badge rewards'
       );
     }
     if (!rewardData.badgeImageUrl) {
-      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeImageUrl is required for digital_badge type');
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeImageUrl is required for digital badge types');
     }
     if (!rewardData.badgeName) {
-      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeName is required for digital_badge type');
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'badgeName is required for digital badge types');
     }
     validateDigitalBadgeConditions(rewardData.conditions);
   }
@@ -176,10 +188,10 @@ async function createReward(rewardData, createdBy) {
       : null,
     
     // Digital Badge fields
-    badgeImageUrl: rewardData.rewardType === 'digital_badge' ? rewardData.badgeImageUrl : null,
-    badgeName: rewardData.rewardType === 'digital_badge' ? rewardData.badgeName : null,
-    badgeDescription: rewardData.rewardType === 'digital_badge' ? (rewardData.badgeDescription || null) : null,
-    conditions: rewardData.rewardType === 'digital_badge'
+    badgeImageUrl: isDigitalBadgeRewardType(rewardData.rewardType) ? rewardData.badgeImageUrl : null,
+    badgeName: isDigitalBadgeRewardType(rewardData.rewardType) ? rewardData.badgeName : null,
+    badgeDescription: isDigitalBadgeRewardType(rewardData.rewardType) ? (rewardData.badgeDescription || null) : null,
+    conditions: isDigitalBadgeRewardType(rewardData.rewardType)
       ? { ...rewardData.conditions, isEnabled: rewardData.conditions.isEnabled !== false }
       : null,
     
@@ -263,9 +275,8 @@ async function updateReward(rewardId, updates, updatedBy) {
 
   // If changing rewardType, validate type-specific fields
   if (updates.rewardType && updates.rewardType !== currentReward.rewardType) {
-    const validTypes = ['coupon', 'percent_off', 'amount_off', 'digital_badge', 'meal_coupon', 'email_approval'];
-    if (!validTypes.includes(updates.rewardType)) {
-      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid rewardType. Must be one of: ${validTypes.join(', ')}`);
+    if (!VALID_REWARD_TYPES.includes(updates.rewardType)) {
+      throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, `Invalid rewardType. Must be one of: ${VALID_REWARD_TYPES.join(', ')}`);
     }
   }
 
@@ -284,14 +295,14 @@ async function updateReward(rewardId, updates, updatedBy) {
   const resultingDeductPoints = Object.prototype.hasOwnProperty.call(updates, 'deductPoints')
     ? updates.deductPoints
     : Number(currentReward.deductPoints || 0);
-  if (resultingType === 'digital_badge' && resultingDeductPoints !== 0) {
+  if (isDigitalBadgeRewardType(resultingType) && resultingDeductPoints !== 0) {
     throw new ApiError(
       HTTP_STATUS.BAD_REQUEST,
       ERROR_CODES.VALIDATION_ERROR,
-      'deductPoints must be zero for digital_badge rewards'
+      'deductPoints must be zero for digital badge rewards'
     );
   }
-  if (resultingType === 'digital_badge' && updates.conditions) {
+  if (isDigitalBadgeRewardType(resultingType) && updates.conditions) {
     validateDigitalBadgeConditions(updates.conditions);
     updates.conditions = {
       ...updates.conditions,

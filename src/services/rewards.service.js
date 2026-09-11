@@ -8,6 +8,17 @@ const QRCode = require('qrcode');
 const { userOrgCache } = require('../middleware/cache.middleware');
 const digitalBadgeService = require('./digital-badge.service');
 
+// Keep the no-filter response backward compatible with released app versions.
+// New reward types must be explicitly requested until those clients understand them.
+const LEGACY_PUBLIC_REWARD_TYPES = [
+  'coupon',
+  'percent_off',
+  'amount_off',
+  'digital_badge',
+  'meal_coupon',
+  'email_approval'
+];
+
 /**
  * Rewards Service - Handles browsing and reserving rewards
  * Supports: coupon, percent_off, amount_off reward types
@@ -49,6 +60,8 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
 
   if (rewardType) {
     query = query.where('rewardType', '==', rewardType);
+  } else {
+    query = query.where('rewardType', 'in', LEGACY_PUBLIC_REWARD_TYPES);
   }
 
   query = query.orderBy('validTo', 'desc')
@@ -104,6 +117,10 @@ async function getAvailableRewards({ category, rewardType, status = 'active', li
         fullImage,
         fullImageGreyed: data.fullImageGreyed,
         badgeImageUrl: data.badgeImageUrl, // Include for digital_badge type
+        badgeName: data.badgeName,
+        badgeDescription: data.badgeDescription,
+        conditions: data.conditions,
+        isAutoRedeemable: data.isAutoRedeemable,
         carbonContribution: data.carbonContribution,
         discountPercent: data.discountPercent,
         discountAmount: data.discountAmount,
