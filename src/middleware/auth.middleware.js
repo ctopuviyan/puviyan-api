@@ -45,6 +45,38 @@ async function verifyFirebaseToken(req, res, next) {
 }
 
 /**
+ * Verify a Firebase ID token issued by the consumer app project only.
+ *
+ * User activity and reward progress live in the consumer Firestore project,
+ * so partner-portal identities must not be allowed to address these resources
+ * merely because they happen to have the same UID.
+ */
+async function verifyConsumerFirebaseToken(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        errorCode: ERROR_CODES.AUTH_MISSING_HEADER,
+        message: 'Missing or invalid authorization header'
+      });
+    }
+
+    const idToken = authHeader.split('Bearer ')[1];
+    const decodedToken = await getAuth().verifyIdToken(idToken);
+    req.user = { uid: decodedToken.uid };
+
+    next();
+  } catch (error) {
+    console.error('Consumer token verification error:', error);
+    return res.status(HTTP_STATUS.UNAUTHORIZED).json({
+      errorCode: ERROR_CODES.AUTH_INVALID_TOKEN,
+      message: 'Invalid or expired consumer token'
+    });
+  }
+}
+
+/**
  * Optional authentication - doesn't fail if token is missing
  */
 async function optionalAuth(req, res, next) {
@@ -79,5 +111,6 @@ async function optionalAuth(req, res, next) {
 
 module.exports = {
   verifyFirebaseToken,
+  verifyConsumerFirebaseToken,
   optionalAuth
 };

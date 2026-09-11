@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const { verifyFirebaseToken } = require('../middleware/auth.middleware');
+const {
+  verifyFirebaseToken,
+  verifyConsumerFirebaseToken
+} = require('../middleware/auth.middleware');
 const { apiLimiter, redemptionLimiter } = require('../middleware/rateLimit.middleware');
 const { cacheMiddleware } = require('../middleware/cache.middleware');
 const rewardsController = require('../controllers/rewards.controller');
@@ -12,10 +15,15 @@ const rewardsController = require('../controllers/rewards.controller');
 router.get('/', cacheMiddleware(300), apiLimiter, rewardsController.getAvailableRewards);
 
 /**
- * Get reward details by ID (public)
- * Cache for 5 minutes
+ * Get authoritative, user-specific digital badge state.
+ * These routes must stay before /:rewardId so Express does not interpret
+ * "digital-badges" as a reward ID.
  */
-router.get('/:rewardId', cacheMiddleware(300), apiLimiter, rewardsController.getRewardDetails);
+router.get('/digital-badges', verifyConsumerFirebaseToken, apiLimiter, rewardsController.getDigitalBadges);
+router.get('/digital-badges/achieved', verifyConsumerFirebaseToken, apiLimiter, rewardsController.getAchievedDigitalBadges);
+router.get('/digital-badges/users/:userId/achieved', verifyConsumerFirebaseToken, apiLimiter, rewardsController.getPublicAchievedDigitalBadges);
+router.get('/digital-badges/:rewardId', verifyConsumerFirebaseToken, apiLimiter, rewardsController.getDigitalBadgeDetails);
+router.post('/digital-badges/recalculate', verifyConsumerFirebaseToken, apiLimiter, rewardsController.recalculateDigitalBadges);
 
 /**
  * Reserve reward (deduct points, generate coupon/QR)
@@ -42,5 +50,11 @@ router.post('/cancel', verifyFirebaseToken, apiLimiter, rewardsController.cancel
  * Note: Auth temporarily disabled for testing - merchants can scan QR
  */
 router.post('/redeem', redemptionLimiter, rewardsController.redeemReward);
+
+/**
+ * Get reward details by ID (public)
+ * Cache for 5 minutes. Keep the dynamic route last.
+ */
+router.get('/:rewardId', cacheMiddleware(300), apiLimiter, rewardsController.getRewardDetails);
 
 module.exports = router;

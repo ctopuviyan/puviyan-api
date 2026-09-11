@@ -51,6 +51,28 @@
       ]
     },
     {
+      "collectionGroup": "rewards",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "categories",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "rewardType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "validTo",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "redemptions",
       "queryScope": "COLLECTION_GROUP",
       "fields": [

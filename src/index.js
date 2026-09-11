@@ -4,14 +4,16 @@ const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
 const path = require('path');
+const fs = require('fs');
 
 // Load environment-specific .env file
-const envFile = process.env.NODE_ENV === 'production' 
-  ? '.env.production' 
-  : process.env.NODE_ENV === 'staging' 
-    ? '.env.stage' 
-    : '.env';
+const envFiles = process.env.NODE_ENV === 'production'
+  ? ['.env.production']
+  : process.env.NODE_ENV === 'staging'
+    ? ['.env.staging', '.env.stage']
+    : ['.env'];
 
+const envFile = envFiles.find(file => fs.existsSync(path.resolve(process.cwd(), file))) || envFiles[0];
 require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
 
 const { initializeFirebase, initializePartnerFirebase } = require('./config/firebase.config');
