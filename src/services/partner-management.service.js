@@ -520,6 +520,12 @@ function createPartnerManagement({
         url = invitationUrl(token);
       const data = linkData(body, orgId, org, roles, scope, c, token),
         ref = links.doc();
+      const inviter = await auth.getUser(c.uid);
+      if (inviter.email?.toLowerCase() === data.email)
+        fail(
+          403,
+          'Another administrator must grant your own additional access.'
+        );
       const existing = await links.where('email', '==', data.email).get();
       if (
         existing.docs.some(
@@ -575,6 +581,8 @@ function createPartnerManagement({
           body.revoke
             ? { revoked: true, updatedAt: now() }
             : {
+                createdBy: actor.uid,
+                updatedBy: actor.uid,
                 tokenHash: crypto
                   .createHash('sha256')
                   .update(token)
@@ -803,9 +811,24 @@ function createPartnerManagement({
             409,
             'This account belongs to another organisation. An administrator must move it.'
           );
-        // Existing accounts keep their approved roles and scope; a link cannot silently replace either.
+        if (!d.createdBy)
+          fail(403, 'An administrator must renew this invitation.');
+        const issuerRecord = await tx.get(users.doc(id(d.createdBy)));
+        const issuer = contextFor(
+          d.createdBy,
+          issuerRecord.exists ? issuerRecord.data() : null
+        );
+        requireManager(issuer);
+        assertOrg(issuer, d.orgId);
+        selectedRoles(d.roles || [d.role], issuer);
+        // Preserve approvals only within the same organisation (or global super-admin access).
+        // Unassigned legacy organisation roles must not become grants in a new organisation.
+        const preserve =
+          old.exists &&
+          (old.data().orgId === d.orgId ||
+            rolesOf(old.data()).includes('puviyan_admin'));
         const roles = selectedRoles(
-          [...rolesOf(old.data()), ...(d.roles || [d.role])],
+          [...(preserve ? rolesOf(old.data()) : []), ...(d.roles || [d.role])],
           { superAdmin: true }
         );
         result = {
@@ -815,7 +838,7 @@ function createPartnerManagement({
           orgId: d.orgId,
           roles,
           role: roles[0],
-          scope: old.exists
+          scope: preserve
             ? old.data().scope || { type: 'org' }
             : d.scope || { type: 'org' },
           status: 'active',

@@ -656,15 +656,12 @@ test('existing portal invitation facade shares multi-role completion and protect
 test('existing portal approvals cannot review another organisation or reuse a request', async () => {
   const f = store(),
     portal = portalService(f);
-  await f.db
-    .collection('signupRequests')
-    .doc('portalRequest')
-    .set({
-      email: 'newbie@example.invalid',
-      name: 'Newbie',
-      assignedOrgId: 'orgB',
-      status: 'pending',
-    });
+  await f.db.collection('signupRequests').doc('portalRequest').set({
+    email: 'newbie@example.invalid',
+    name: 'Newbie',
+    assignedOrgId: 'orgB',
+    status: 'pending',
+  });
   await assert.rejects(
     portal.approveSignupRequest({
       requestId: 'portalRequest',
@@ -709,4 +706,47 @@ test('legacy portal validation rejects renewed/revoked links and public role req
     }),
     (e) => e.statusCode === 400
   );
+});
+
+test('self-invitations cannot bypass the own-access guard', async () => {
+  const f = store();
+  await rejects(
+    f.svc.invite(f.c('admin'), { ...grant(), email: 'admin@example.invalid' }),
+    403
+  );
+});
+test('pending invitations require an active authorised issuer; another admin can renew them', async () => {
+  const f = store();
+  const original = await f.svc.invite(f.c('admin'), grant());
+  f.db.data.get('partnerUsers/admin').roles = ['org_analyst'];
+  await rejects(
+    f.svc.complete(
+      { uid: 'newbie', email: 'newbie@example.invalid' },
+      token(original)
+    ),
+    403
+  );
+  const renewed = await f.svc.changeInvite(f.c('root'), original.id, {});
+  assert.equal(f.db.data.get('signupLinks/' + original.id).createdBy, 'root');
+  const accepted = await f.svc.complete(
+    { uid: 'newbie', email: 'newbie@example.invalid' },
+    token(renewed)
+  );
+  assert.deepEqual(accepted.user.roles, ['org_analyst']);
+});
+test('unassigned legacy accounts receive only the newly approved organisation roles', async () => {
+  const f = store();
+  f.db.data.set('partnerUsers/newbie', {
+    email: 'newbie@example.invalid',
+    name: 'Legacy unassigned',
+    roles: ['org_admin'],
+    scope: { type: 'org' },
+  });
+  const link = await f.svc.invite(f.c('admin'), grant(['partner_staff']));
+  const accepted = await f.svc.complete(
+    { uid: 'newbie', email: 'newbie@example.invalid' },
+    token(link)
+  );
+  assert.deepEqual(accepted.user.roles, ['partner_staff']);
+  assert.equal(accepted.user.orgId, 'orgA');
 });

@@ -84,7 +84,7 @@ async function submitSignupRequest({ email, name, organizationName, existingOrgI
     .where('email', '==', email)
     .get();
 
-  if (!existingUsers.empty) {
+  if (existingUsers.docs.some(doc => !!doc.data().orgId || [...(doc.data().roles || []), doc.data().role].includes('puviyan_admin'))) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'An account already exists for this email. Please sign in instead.');
   }
 
