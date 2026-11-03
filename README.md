@@ -82,6 +82,10 @@ POST   /api/v1/partners/:id/redemptions  # Partner's redemptions
 GET    /api/v1/partners/:id/analytics    # Partner analytics
 ```
 
+### Partner Mobile App
+
+The iampuviyan Partner Flutter app shares this API. Projects, optional events, and private geotagged tree records use `/api/v1/partner-app/*`; existing portal and consumer routes retain their current paths. See [Partner mobile API](docs/PARTNER_APP_API.md) for endpoints, staging setup, and private photo storage. Run `npm run test:partner-app` for the isolated HTTP integration suite.
+
 ### Points APIs
 
 ```
