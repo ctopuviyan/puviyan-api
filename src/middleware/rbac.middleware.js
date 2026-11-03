@@ -27,7 +27,10 @@ function requireRole(allowedRoles) {
       }
 
       const partnerUser = partnerUserDoc.data();
-      const userRoles = partnerUser.roles || [];
+      const userRoles = [...new Set([...(partnerUser.roles || []), partnerUser.role].filter(Boolean))];
+      if (partnerUser.status && partnerUser.status !== 'active') {
+        throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Partner access is not active');
+      }
 
       // Check if user has any of the allowed roles
       const hasRole = allowedRoles.some(role => userRoles.includes(role));
@@ -87,7 +90,10 @@ function requireOrgAccess(orgIdParam = 'orgId') {
       }
 
       const partnerUser = partnerUserDoc.data();
-      const userRoles = partnerUser.roles || [];
+      const userRoles = [...new Set([...(partnerUser.roles || []), partnerUser.role].filter(Boolean))];
+      if (partnerUser.status && partnerUser.status !== 'active') {
+        throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Partner access is not active');
+      }
 
       // Puviyan admins have access to all orgs
       if (userRoles.includes('puviyan_admin')) {

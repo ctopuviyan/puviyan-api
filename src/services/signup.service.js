@@ -2,7 +2,6 @@ const { getFirestore, FieldValue } = require('../config/firebase.config');
 const { ApiError } = require('../middleware/error.middleware');
 const { HTTP_STATUS, ERROR_CODES } = require('../config/constants');
 const crypto = require('crypto');
-const emailService = require('./email.service');
 
 /**
  * New Signup System Service
@@ -20,10 +19,19 @@ const emailService = require('./email.service');
  * 5. Org Admins can invite more users
  */
 
-// Generate secure random token for signup links
-function generateSignupToken() {
-  return crypto.randomBytes(32).toString('base64url');
+
+async function sharedManagement(actorUid) {
+  const { getPartnerAuth } = require('../config/firebase.config');
+  const { createPartnerManagement } = require('./partner-management.service');
+  const { contextFor } = require('./partner-project-policy');
+  const db = getFirestore();
+  const record = await db.collection('partnerUsers').doc(actorUid).get();
+  return { service: createPartnerManagement({ db, auth: getPartnerAuth() }), actor: contextFor(actorUid, record.exists ? record.data() : null) };
 }
+function portalFailure(error) { error.statusCode = error.statusCode || error.status || 500; throw error; }
+
+// Generate secure random token for signup links
+
 
 // Hash token for storage
 function hashToken(token) {
@@ -58,7 +66,13 @@ async function getPublicOrganizations() {
 /**
  * Submit a signup request (public endpoint)
  */
-async function submitSignupRequest({ email, name, organizationName, existingOrgId, reason }) {
+async function submitSignupRequest({ email, name, organizationName, existingOrgId, reason, requestedRoles = [] }) {
+  email = typeof email === 'string' ? email.trim().toLowerCase() : email;
+  name = typeof name === 'string' ? name.trim() : name;
+  const allowedRequests = ['org_admin','org_analyst','partner_admin','partner_staff','partner_user'];
+  if (!Array.isArray(requestedRoles) || requestedRoles.some(r => !allowedRequests.includes(r))) {
+    throw new ApiError(400, ERROR_CODES.VALIDATION_ERROR, 'Choose supported partner roles');
+  }
   const db = getFirestore();
   
   if (!email || !name || !organizationName) {
@@ -95,6 +109,7 @@ async function submitSignupRequest({ email, name, organizationName, existingOrgI
     name,
     organizationName,
     assignedOrgId: existingOrgId || null, // If user selected existing org, store it
+    requestedRoles: [...new Set(requestedRoles)],
     reason: reason || '',
     status: 'pending', // pending, approved, rejected
     createdAt: FieldValue.serverTimestamp(),
@@ -165,193 +180,31 @@ async function getSignupRequests({ status, limit = 50, orgId = null }) {
  * Approve signup request and generate signup link (Puviyan Admin only)
  */
 async function approveSignupRequest({ requestId, orgId, role = 'org_admin', approvedBy }) {
-  const db = getFirestore();
-  
-  if (!['org_admin', 'org_analyst'].includes(role)) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Invalid role. Must be org_admin or org_analyst');
-  }
-
-  // Get the request
-  const requestDoc = await db.collection('signupRequests').doc(requestId).get();
-  
-  if (!requestDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RESOURCE_NOT_FOUND, 'Signup request not found');
-  }
-
-  const request = requestDoc.data();
-  
-  if (request.status !== 'pending') {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Request has already been processed');
-  }
-
-  // Verify organization exists
-  const orgDoc = await db.collection('organizations').doc(orgId).get();
-  if (!orgDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RESOURCE_NOT_FOUND, 'Organization not found');
-  }
-
-  // Generate signup token
-  const token = generateSignupToken();
-  const tokenHash = hashToken(token);
-
-  // Create signup link record with 7-day expiration
-  const expirationDate = new Date();
-  expirationDate.setDate(expirationDate.getDate() + 7); // 7 days from now
-  
-  const signupLinkData = {
-    email: request.email,
-    name: request.name,
-    orgId,
-    orgName: orgDoc.data().name,
-    role,
-    tokenHash,
-    used: false,
-    createdBy: approvedBy,
-    createdAt: FieldValue.serverTimestamp(),
-    expiresAt: expirationDate,
-  };
-
-  const linkRef = await db.collection('signupLinks').add(signupLinkData);
-
-  const signupUrl = `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`;
-
-  // Update request status
-  await db.collection('signupRequests').doc(requestId).update({
-    status: 'approved',
-    approvedBy,
-    approvedAt: FieldValue.serverTimestamp(),
-    signupLinkId: linkRef.id,
-    signupUrl, // Store the URL for easy retrieval
-    assignedOrgId: orgId,
-    assignedOrgName: orgDoc.data().name,
-    assignedRole: role,
-    updatedAt: FieldValue.serverTimestamp(),
-  });
-
-  // Send signup link email (isDirectInvite: false for approved requests)
-  const emailResult = await emailService.sendSignupLinkEmail({
-    to: request.email,
-    name: request.name,
-    signupUrl,
-    orgName: orgDoc.data().name,
-    isDirectInvite: false,
-  });
-
-  return {
-    signupLinkId: linkRef.id,
-    token,
-    signupUrl,
-    emailSent: emailResult.success,
-    emailError: emailResult.error,
-  };
+  try {
+    const { service, actor } = await sharedManagement(approvedBy);
+    const result = await service.review(actor, requestId, { decision: 'approve', orgId, roles: [role], sendEmail: true });
+    const request = await getFirestore().collection('signupRequests').doc(requestId).get();
+    return { ...result, signupLinkId: request.data().signupLinkId || null, token: result.signupUrl ? new URL(result.signupUrl).searchParams.get('token') : null };
+  } catch (error) { return portalFailure(error); }
 }
 
 /**
  * Reject signup request (Puviyan Admin only)
  */
 async function rejectSignupRequest({ requestId, rejectedBy, reason }) {
-  const db = getFirestore();
-  
-  const requestDoc = await db.collection('signupRequests').doc(requestId).get();
-  
-  if (!requestDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RESOURCE_NOT_FOUND, 'Signup request not found');
-  }
-
-  const request = requestDoc.data();
-  
-  if (request.status !== 'pending') {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Request has already been processed');
-  }
-
-  await db.collection('signupRequests').doc(requestId).update({
-    status: 'rejected',
-    rejectedBy,
-    rejectedAt: FieldValue.serverTimestamp(),
-    rejectionReason: reason || '',
-    updatedAt: FieldValue.serverTimestamp(),
-  });
-
-  // Send rejection email
-  const emailResult = await emailService.sendRejectionEmail({
-    to: request.email,
-    name: request.name,
-    reason: reason || '',
-  });
-
-  return { 
-    success: true,
-    emailSent: emailResult.success,
-    emailError: emailResult.error,
-  };
+  try { const { service, actor } = await sharedManagement(rejectedBy);
+    return await service.review(actor, requestId, { decision: 'reject', reason: reason || 'Request not approved.', sendEmail: true });
+  } catch (error) { return portalFailure(error); }
 }
 
 /**
  * Generate signup link for existing org (Org Admin only)
  */
 async function generateSignupLink({ email, name, orgId, role, createdBy }) {
-  const db = getFirestore();
-  
-  if (!['org_admin', 'org_analyst'].includes(role)) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Invalid role. Must be org_admin or org_analyst');
-  }
-
-  // Verify organization exists
-  const orgDoc = await db.collection('organizations').doc(orgId).get();
-  if (!orgDoc.exists) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RESOURCE_NOT_FOUND, 'Organization not found');
-  }
-
-  // Check if user already exists
-  const existingUser = await db.collection('partnerUsers')
-    .where('email', '==', email)
-    .where('orgId', '==', orgId)
-    .get();
-
-  if (!existingUser.empty) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'User already exists in this organization');
-  }
-
-  // Generate signup token
-  const token = generateSignupToken();
-  const tokenHash = hashToken(token);
-
-  // Create signup link record with 7-day expiration
-  const expirationDate = new Date();
-  expirationDate.setDate(expirationDate.getDate() + 7); // 7 days from now
-  
-  const signupLinkData = {
-    email,
-    name: name || '',
-    orgId,
-    orgName: orgDoc.data().name,
-    role,
-    tokenHash,
-    used: false,
-    createdBy,
-    createdAt: FieldValue.serverTimestamp(),
-    expiresAt: expirationDate,
-  };
-
-  const linkRef = await db.collection('signupLinks').add(signupLinkData);
-
-  const signupUrl = `${process.env.PARTNER_PORTAL_URL || 'http://localhost:3000'}/signup?token=${token}`;
-
-  // Send signup link email
-  const emailResult = await emailService.sendSignupLinkEmail({
-    to: email,
-    name: name || email,
-    signupUrl,
-    orgName: orgDoc.data().name,
-  });
-
-  return {
-    signupLinkId: linkRef.id,
-    token,
-    signupUrl,
-    emailSent: emailResult.success,
-    emailError: emailResult.error,
-  };
+  try { const { service, actor } = await sharedManagement(createdBy);
+    const result = await service.invite(actor, { email, name: name || email, orgId, roles: [role], sendEmail: true });
+    return { ...result, signupLinkId: result.id, token: new URL(result.signupUrl).searchParams.get('token') };
+  } catch (error) { return portalFailure(error); }
 }
 
 /**
@@ -374,7 +227,7 @@ async function validateSignupToken({ token }) {
   const linkDoc = linksSnapshot.docs[0];
   const linkData = linkDoc.data();
 
-  if (linkData.used) {
+  if (linkData.used || linkData.revoked) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This signup link has already been used');
   }
 
@@ -393,6 +246,8 @@ async function validateSignupToken({ token }) {
     orgId: linkData.orgId,
     orgName: linkData.orgName,
     role: linkData.role,
+    roles: linkData.roles || [linkData.role],
+    scope: linkData.scope || { type: 'org' },
   };
 }
 
@@ -400,56 +255,9 @@ async function validateSignupToken({ token }) {
  * Complete signup using token
  */
 async function completeSignup({ token, uid, email }) {
-  const db = getFirestore();
-  
-  const tokenHash = hashToken(token);
-  
-  const linksSnapshot = await db.collection('signupLinks')
-    .where('tokenHash', '==', tokenHash)
-    .limit(1)
-    .get();
-
-  if (linksSnapshot.empty) {
-    throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.RESOURCE_NOT_FOUND, 'Invalid or expired signup link');
-  }
-
-  const linkDoc = linksSnapshot.docs[0];
-  const linkData = linkDoc.data();
-
-  if (linkData.used) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'This signup link has already been used');
-  }
-
-  if (linkData.email.toLowerCase() !== email.toLowerCase()) {
-    throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Email does not match signup link');
-  }
-
-  // Create partner user
-  const partnerUserData = {
-    email: linkData.email,
-    name: linkData.name,
-    orgId: linkData.orgId,
-    roles: [linkData.role],
-    createdAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-
-  await db.collection('partnerUsers').doc(uid).set(partnerUserData);
-
-  // Mark link as used
-  await db.collection('signupLinks').doc(linkDoc.id).update({
-    used: true,
-    usedAt: FieldValue.serverTimestamp(),
-    usedBy: uid,
-  });
-
-  return {
-    success: true,
-    user: {
-      uid,
-      ...partnerUserData,
-    },
-  };
+  const { getPartnerAuth } = require('../config/firebase.config');
+  const { createPartnerManagement } = require('./partner-management.service');
+  return createPartnerManagement({ db: getFirestore(), auth: getPartnerAuth() }).complete({ uid, email }, token).catch(error => { error.statusCode = error.status || 500; throw error; });
 }
 
 /**

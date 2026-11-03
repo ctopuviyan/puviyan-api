@@ -6,14 +6,16 @@ const { fail, contextFor, assertOrg, assertProject, text, validDate, treeMetadat
 const { getFirestore, getPartnerAuth } = require('../config/firebase.config');
 const { apiLimiter } = require('../middleware/rateLimit.middleware');
 const { getPartnerTreeBucket } = require('../services/partner-tree-storage.service');
+const { createPartnerManagement } = require('../services/partner-management.service');
 
 // Reuse the shared API's initialized Firebase apps; dependencies remain injectable for tests.
 function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
-  getBucket = getPartnerTreeBucket, logger = console } = {}) {
+  getBucket = getPartnerTreeBucket, logger = console, managementOptions = {} } = {}) {
   const router = express.Router();
   router.use(apiLimiter);
   const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   const projects = db.collection('partnerProjects');
+  const management = createPartnerManagement({ db, auth, ...managementOptions });
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 1, fieldSize: 16 * 1024 } });
   router.use(async (req, _res, next) => {
     try {
@@ -22,11 +24,31 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       let decoded;
       try { decoded = await auth.verifyIdToken(token, true); }
       catch (_) { fail(401, 'Your session has expired. Please sign in again.'); }
-      const user = await db.collection('partnerUsers').doc(decoded.uid).get();
-      req.context = contextFor(decoded.uid, user.exists ? user.data() : null);
+      req.identity = { uid: decoded.uid, email: decoded.email || '' };
       next();
     } catch (error) { next(error); }
   });
+  // Authenticated account routes also serve invited users who are not onboarded yet.
+  router.get('/account', wrap(async (req,res) => res.json(await management.account(req.identity))));
+  router.patch('/account', wrap(async (req,res) => res.json(await management.profile(req.identity,req.body))));
+  router.get('/account/requests', wrap(async (req,res) => res.json(await management.ownRequests(req.identity))));
+  router.post('/account/complete-signup', wrap(async (req,res) => res.json(await management.complete(req.identity,req.body.token))));
+  router.use(async (req,_res,next) => {
+    try { const user = await db.collection('partnerUsers').doc(req.identity.uid).get();
+      req.context = contextFor(req.identity.uid,user.exists ? user.data() : null); next();
+    } catch(error) { next(error); }
+  });
+  router.post('/account/role-requests', wrap(async (req,res) => res.status(201).json(await management.requestRoles(req.context,req.identity,req.body))));
+  router.get('/management/organisations', wrap(async (req,res) => res.json(await management.organisations(req.context))));
+  router.post('/management/organisations', wrap(async (req,res) => res.status(201).json(await management.saveOrganisation(req.context,null,req.body))));
+  router.patch('/management/organisations/:orgId', wrap(async (req,res) => res.json(await management.saveOrganisation(req.context,req.params.orgId,req.body))));
+  router.get('/management/users', wrap(async (req,res) => res.json(await management.listUsers(req.context,req.query.orgId))));
+  router.patch('/management/users/:uid', wrap(async (req,res) => res.json(await management.updateUser(req.context,req.params.uid,req.body))));
+  router.get('/management/invitations', wrap(async (req,res) => res.json(await management.listInvites(req.context,req.query.orgId))));
+  router.post('/management/invitations', wrap(async (req,res) => res.status(201).json(await management.invite(req.context,req.body))));
+  router.post('/management/invitations/:id', wrap(async (req,res) => res.json(await management.changeInvite(req.context,req.params.id,req.body))));
+  router.get('/management/requests', wrap(async (req,res) => res.json(await management.listRequests(req.context,req.query.status))));
+  router.post('/management/requests/:id/review', wrap(async (req,res) => res.json(await management.review(req.context,req.params.id,req.body))));
   function projectRef(id) {
     if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id || '')) fail(400, 'Invalid project ID.');
     return projects.doc(id);

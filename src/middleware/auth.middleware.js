@@ -21,7 +21,7 @@ async function verifyFirebaseToken(req, res, next) {
     // Try Partner Auth first (for partner portal users)
     let decodedToken;
     try {
-      decodedToken = await getPartnerAuth().verifyIdToken(idToken);
+      decodedToken = await getPartnerAuth().verifyIdToken(idToken, true);
     } catch (partnerError) {
       // Fallback to main auth (for other users)
       decodedToken = await getAuth().verifyIdToken(idToken);
@@ -89,7 +89,7 @@ async function optionalAuth(req, res, next) {
       // Try Partner Auth first (for partner portal users)
       let decodedToken;
       try {
-        decodedToken = await getPartnerAuth().verifyIdToken(idToken);
+        decodedToken = await getPartnerAuth().verifyIdToken(idToken, true);
       } catch (partnerError) {
         // Fallback to main auth (for other users)
         decodedToken = await getAuth().verifyIdToken(idToken);

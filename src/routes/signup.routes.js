@@ -3,6 +3,8 @@ const router = express.Router();
 const signupController = require('../controllers/signup.controller');
 const { verifyFirebaseToken } = require('../middleware/auth.middleware');
 const { requireRole } = require('../middleware/rbac.middleware');
+const { verifyPartnerFirebaseToken } = require('../middleware/partner-auth.middleware');
+const signupIdentity = (req,res,next) => verifyPartnerFirebaseToken(req,res,() => { req.user = req.partnerUser; next(); });
 
 /**
  * Public routes
@@ -22,7 +24,7 @@ router.get('/signup/validate', signupController.validateSignupToken);
  */
 
 // Complete signup (requires auth but no specific role)
-router.post('/signup/complete', verifyFirebaseToken, signupController.completeSignup);
+router.post('/signup/complete', signupIdentity, signupController.completeSignup);
 
 /**
  * Puviyan Admin routes
