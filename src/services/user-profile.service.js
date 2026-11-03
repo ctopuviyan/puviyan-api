@@ -42,6 +42,10 @@ async function updateUserProfile(userId, updates) {
     
     // Use set with merge to create if doesn't exist, update if exists
     await db.collection('partner_users').doc(userId).set(firestoreUpdates, { merge: true });
+    const canonical = db.collection('partnerUsers').doc(userId);
+    if ((await canonical.get()).exists) {
+      await canonical.set({ ...firestoreUpdates, ...(updates.displayName !== undefined ? { name: updates.displayName } : {}) }, { merge: true });
+    }
 
     return {
       message: 'Profile updated successfully',

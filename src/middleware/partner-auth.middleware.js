@@ -20,7 +20,7 @@ async function verifyPartnerFirebaseToken(req, res, next) {
     // Ensure partner auth app is initialized
     initializePartnerFirebase();
 
-    const decodedToken = await getPartnerAuth().verifyIdToken(idToken);
+    const decodedToken = await getPartnerAuth().verifyIdToken(idToken, true);
 
     req.partnerUser = {
       uid: decodedToken.uid,

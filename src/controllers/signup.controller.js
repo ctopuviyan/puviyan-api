@@ -18,7 +18,7 @@ async function getPublicOrganizations(req, res, next) {
  */
 async function submitSignupRequest(req, res, next) {
   try {
-    const { email, name, organizationName, existingOrgId, reason } = req.body;
+    const { email, name, organizationName, existingOrgId, reason, requestedRoles } = req.body;
     
     const result = await signupService.submitSignupRequest({
       email,
@@ -26,6 +26,7 @@ async function submitSignupRequest(req, res, next) {
       organizationName,
       existingOrgId,
       reason,
+      requestedRoles,
     });
     
     res.status(HTTP_STATUS.CREATED).json(result);
