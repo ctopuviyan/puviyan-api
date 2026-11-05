@@ -7,12 +7,15 @@ const { getFirestore, getPartnerAuth } = require('../config/firebase.config');
 const { apiLimiter } = require('../middleware/rateLimit.middleware');
 const { getPartnerTreeBucket } = require('../services/partner-tree-storage.service');
 const { createPartnerManagement } = require('../services/partner-management.service');
+const { createSustainabilityRouter } = require('./sustainability-accounts.routes');
+const { requirePasswordIdentity } = require('../services/sustainability-accounts.service');
 
 // Reuse the shared API's initialized Firebase apps; dependencies remain injectable for tests.
 function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
-  getBucket = getPartnerTreeBucket, logger = console, managementOptions = {} } = {}) {
+  getBucket = getPartnerTreeBucket, logger = console, managementOptions = {}, sustainabilityOptions = {} } = {}) {
   const router = express.Router();
   router.use(apiLimiter);
+  router.use('/v2', createSustainabilityRouter({db,auth,options:sustainabilityOptions}));
   const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   const projects = db.collection('partnerProjects');
   const management = createPartnerManagement({ db, auth, ...managementOptions });
@@ -24,7 +27,14 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       let decoded;
       try { decoded = await auth.verifyIdToken(token, true); }
       catch (_) { fail(401, 'Your session has expired. Please sign in again.'); }
-      req.identity = { uid: decoded.uid, email: decoded.email || '' };
+      req.identity = { uid: decoded.uid, email: decoded.email || '', signInProvider: decoded.firebase?.sign_in_provider };
+      const membership = await db.collection('partnerUsers').doc(decoded.uid).get();
+      if (membership.data()?.membershipVersion === 2) {
+        await requirePasswordIdentity(auth,req.identity);
+        const org = await db.collection('organizations').doc(membership.data().orgId).get();
+        if (!org.exists || org.data().status !== 'active') fail(403,'The organisation is inactive.');
+        if (!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) || (req.path === '/account' && req.method !== 'GET')) fail(403,'Use the sustainability v2 account and member APIs.');
+      }
       next();
     } catch (error) { next(error); }
   });
@@ -76,7 +86,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
         }
       }
     }
-    res.json({ uid: c.uid, orgId: c.orgId, orgName, roles: c.roles,
+    res.json({ uid: c.uid, membershipVersion: c.membershipVersion, orgId: c.orgId, orgName, roles: c.roles,
       departmentScoped: c.departmentScoped, departments, canWrite: c.canWrite });
   }));
   router.get('/organisations', wrap(async (req, res) => {

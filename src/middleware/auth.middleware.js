@@ -1,4 +1,5 @@
-const { getAuth, getPartnerAuth } = require('../config/firebase.config');
+const { getAuth, getPartnerAuth, getFirestore } = require('../config/firebase.config');
+const { requirePasswordIdentity } = require('../services/sustainability-accounts.service');
 const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 
 /**
@@ -19,14 +20,25 @@ async function verifyFirebaseToken(req, res, next) {
     const idToken = authHeader.split('Bearer ')[1];
     
     // Try Partner Auth first (for partner portal users)
-    let decodedToken;
+    let decodedToken, partnerIdentity = false;
     try {
       decodedToken = await getPartnerAuth().verifyIdToken(idToken, true);
+      partnerIdentity = true;
     } catch (partnerError) {
       // Fallback to main auth (for other users)
       decodedToken = await getAuth().verifyIdToken(idToken);
     }
     
+    if (partnerIdentity) {
+      const member = await getFirestore().collection('partnerUsers').doc(decodedToken.uid).get();
+      if (member.data()?.membershipVersion === 2) {
+        if (member.data().status !== 'active') return res.status(403).json({message:'Your sustainability membership is inactive.'});
+        await requirePasswordIdentity(getPartnerAuth(), {uid:decodedToken.uid,email:decodedToken.email,signInProvider:decodedToken.firebase?.sign_in_provider});
+        if (!req.baseUrl?.endsWith('/upload') || !['/image','/images'].includes(req.path)) {
+          return res.status(403).json({message:'Use the sustainability v2 APIs for this account.'});
+        }
+      }
+    }
     // Attach user info to request
     req.user = {
       uid: decodedToken.uid,

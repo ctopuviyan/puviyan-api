@@ -1,5 +1,5 @@
-const KNOWN_ROLES = new Set(['puviyan_admin', 'org_admin', 'org_analyst', 'partner_admin', 'partner_staff', 'partner_user']);
-const WRITE_ROLES = new Set(['puviyan_admin', 'org_admin', 'partner_admin', 'partner_staff', 'partner_user']);
+const KNOWN_ROLES = new Set(['puviyan_admin', 'org_admin', 'org_analyst', 'partner_admin', 'partner_staff', 'partner_user', 'sustainability_action_owner', 'sustainability_service_provider']);
+const WRITE_ROLES = new Set(['puviyan_admin', 'org_admin', 'partner_admin', 'partner_staff', 'partner_user', 'sustainability_action_owner', 'sustainability_service_provider']);
 function fail(status, message) { const error = new Error(message); error.status = status; throw error; }
 function contextFor(uid, user) {
   if (!user || (user.status && user.status !== 'active')) fail(403, 'Your partner access is not active. Contact your administrator.');
@@ -10,7 +10,7 @@ function contextFor(uid, user) {
   const scoped = !superAdmin && user.scope?.type === 'departments';
   const departmentIds = scoped && Array.isArray(user.scope.departmentIds) ? user.scope.departmentIds.filter(id => typeof id === 'string' && id.length > 0) : [];
   if (!superAdmin && user.scope?.type && !['org', 'departments'].includes(user.scope.type)) fail(403, 'Unsupported partner scope. Contact your administrator.');
-  return { uid, orgId: user.orgId || null, roles, superAdmin, departmentScoped: scoped, departmentIds, canWrite: roles.some(r => WRITE_ROLES.has(r)) };
+  return { uid, membershipVersion: user.membershipVersion || 1, orgId: user.orgId || null, roles, superAdmin, departmentScoped: scoped, departmentIds, canWrite: roles.some(r => WRITE_ROLES.has(r)) };
 }
 function assertOrg(context, orgId) {
   if (typeof orgId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(orgId)) fail(400, 'Select a valid organisation.');

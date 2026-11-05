@@ -1,3 +1,4 @@
+const admin = require('firebase-admin');
 const { getFirestore } = require('../config/firebase.config');
 const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 const { ApiError } = require('../middleware/error.middleware');
@@ -363,35 +364,13 @@ async function createOrg({ partnerUid, orgName, requestedOrgId = null }) {
   const inviteCode = generateInviteCode();
   const inviteCodeHash = hashInviteCode(inviteCode);
 
-  const batch = db.batch();
-
-  batch.set(orgRef, {
-    name: orgName.trim(),
-    status: 'active',
-    inviteCodeHash,
-    createdAt: now,
-    updatedAt: now,
-    createdByPartnerUid: partnerUid,
-    // OrgOnboarder compatibility fields
-    currentEpoch: 0,
-    lastFinalizedEpoch: 0,
-    partnerManaged: true, // Flag to indicate this org is managed by partners
+  await db.runTransaction(async tx => {
+    const [current, existingOrg] = await Promise.all([tx.get(partnerUserRef),tx.get(orgRef)]);
+    if (current.data()?.orgId || current.data()?.membershipVersion === 2) throw new ApiError(409, ERROR_CODES.VAL_DUPLICATE_ENTRY, 'Partner is already onboarded.');
+    if (existingOrg.exists) throw new ApiError(409, ERROR_CODES.VAL_DUPLICATE_ENTRY, 'Organisation already exists.');
+    tx.create(orgRef,{name:orgName.trim(),status:'active',inviteCodeHash,createdAt:now,updatedAt:now,createdByPartnerUid:partnerUid,currentEpoch:0,lastFinalizedEpoch:0,partnerManaged:true});
+    tx.set(partnerUserRef,{orgId,roles:['partner_admin'],scope:{type:'org'},status:'active',createdAt:now,updatedAt:now},{merge:true});
   });
-
-  batch.set(
-    partnerUserRef,
-    {
-      orgId,
-      roles: ['partner_admin'],
-      scope: { type: 'org' },
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-    },
-    { merge: true }
-  );
-
-  await batch.commit();
 
   return {
     orgId,
@@ -434,6 +413,7 @@ async function joinOrg({ partnerUid, orgId, inviteCode }) {
   }
 
   const orgData = orgDoc.data() || {};
+  if (orgData.membershipVersion === 2) throw new ApiError(403, ERROR_CODES.AUTH_FORBIDDEN, 'An email invitation is required for this organisation.');
   if (!orgData.inviteCodeHash) {
     throw new ApiError(HTTP_STATUS.FORBIDDEN, ERROR_CODES.AUTH_FORBIDDEN, 'Organization is not joinable');
   }
@@ -444,17 +424,12 @@ async function joinOrg({ partnerUid, orgId, inviteCode }) {
   }
 
   const now = new Date();
-  await partnerUserRef.set(
-    {
-      orgId,
-      roles: ['partner_user'],
-      scope: { type: 'org' },
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-    },
-    { merge: true }
-  );
+  await db.runTransaction(async tx => {
+    const [current, latestOrg] = await Promise.all([tx.get(partnerUserRef),tx.get(orgRef)]);
+    if (current.data()?.orgId || current.data()?.membershipVersion === 2) throw new ApiError(409,ERROR_CODES.VAL_DUPLICATE_ENTRY,'Partner is already onboarded.');
+    if (!latestOrg.exists || latestOrg.data().membershipVersion === 2 || latestOrg.data().inviteCodeHash !== providedHash) throw new ApiError(403,ERROR_CODES.AUTH_FORBIDDEN,'Use a valid invitation for this organisation.');
+    tx.set(partnerUserRef,{orgId,roles:['partner_user'],scope:{type:'org'},status:'active',createdAt:now,updatedAt:now},{merge:true});
+  });
 
   return {
     orgId,
@@ -778,20 +753,13 @@ async function approveOrgLinkRequest(adminUid, partnerUid, requestId, assignedRo
     throw new Error('Request is not pending');
   }
 
-  // Update request status
-  await requestRef.update({
-    status: 'approved',
-    approvedBy: adminUid,
-    approvedAt: admin.firestore.FieldValue.serverTimestamp(),
-    assignedRole,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-
-  // Update partner user with org and role
-  await db.collection('partnerUsers').doc(partnerUid).update({
-    orgId: requestData.orgId,
-    role: assignedRole,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  await db.runTransaction(async tx => {
+    const target = db.collection('partnerUsers').doc(partnerUid);
+    const [current, request, org, actor] = await Promise.all([tx.get(target),tx.get(requestRef),tx.get(db.collection('organizations').doc(requestData.orgId)),tx.get(db.collection('partnerUsers').doc(adminUid))]);
+    if (current.data()?.membershipVersion === 2 || org.data()?.membershipVersion === 2 || actor.data()?.membershipVersion === 2) throw new ApiError(403,ERROR_CODES.AUTH_FORBIDDEN,'Use sustainability v2 invitations.');
+    if (!request.exists || request.data().status !== 'pending' || request.data().orgId !== actor.data()?.orgId || ![...(actor.data()?.roles||[]),actor.data()?.role].includes('partner_admin') || actor.data()?.status === 'inactive') throw new ApiError(403,ERROR_CODES.AUTH_FORBIDDEN,'This request cannot be approved.');
+    tx.update(requestRef,{status:'approved',approvedBy:adminUid,approvedAt:admin.firestore.FieldValue.serverTimestamp(),assignedRole,updatedAt:admin.firestore.FieldValue.serverTimestamp()});
+    tx.update(target,{orgId:requestData.orgId,role:assignedRole,updatedAt:admin.firestore.FieldValue.serverTimestamp()});
   });
 
   return {

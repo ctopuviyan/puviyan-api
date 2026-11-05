@@ -52,7 +52,7 @@ async function getPublicOrganizations() {
   snapshot.forEach(doc => {
     const data = doc.data();
     // Only include active organizations or those without a status field
-    if (!data.status || data.status === 'active') {
+    if (data.membershipVersion !== 2 && (!data.status || data.status === 'active')) {
       organizations.push({
         id: doc.id,
         name: data.name,
@@ -77,6 +77,10 @@ async function submitSignupRequest({ email, name, organizationName, existingOrgI
   
   if (!email || !name || !organizationName) {
     throw new ApiError(HTTP_STATUS.BAD_REQUEST, ERROR_CODES.VALIDATION_ERROR, 'Email, name, and organization name are required');
+  }
+
+  if (existingOrgId && (await db.collection('organizations').doc(existingOrgId).get()).data()?.membershipVersion === 2) {
+    throw new ApiError(403, ERROR_CODES.AUTH_FORBIDDEN, 'An email invitation is required for this organisation.');
   }
 
   // Check if user already exists in the system

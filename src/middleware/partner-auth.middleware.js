@@ -1,4 +1,4 @@
-const { getPartnerAuth, initializePartnerFirebase } = require('../config/firebase.config');
+const { getPartnerAuth, initializePartnerFirebase, getFirestore } = require('../config/firebase.config');
 const { ERROR_CODES, HTTP_STATUS } = require('../config/constants');
 
 /**
@@ -22,6 +22,10 @@ async function verifyPartnerFirebaseToken(req, res, next) {
 
     const decodedToken = await getPartnerAuth().verifyIdToken(idToken, true);
 
+    const member = await getFirestore().collection('partnerUsers').doc(decodedToken.uid).get();
+    if (member.data()?.membershipVersion === 2) {
+      return res.status(403).json({message:'Use the sustainability v2 APIs for this account.'});
+    }
     req.partnerUser = {
       uid: decodedToken.uid,
       email: decodedToken.email,

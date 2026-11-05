@@ -21,10 +21,11 @@ const rolesOf = (user) => [
   ),
 ];
 const canManage = (c) =>
-  c.superAdmin ||
+  c.membershipVersion !== 2 && (c.superAdmin ||
   (!c.departmentScoped &&
-    c.roles.some((r) => ['org_admin', 'partner_admin'].includes(r)));
+    c.roles.some((r) => ['org_admin', 'partner_admin'].includes(r))));
 function requireManager(c) {
+  if (c.membershipVersion === 2) fail(403, 'Use the sustainability v2 member APIs.');
   if (!canManage(c))
     fail(403, 'Organisation administrator access is required.');
 }
@@ -170,9 +171,11 @@ function createPartnerManagement({
     const d = await orgs.doc(id(orgId)).get();
     if (!d.exists || (d.data().status && d.data().status !== 'active'))
       fail(400, 'Select an active organisation.');
+    if (d.data().membershipVersion === 2) fail(403,'Use the sustainability v2 organisation APIs.');
     return d.data();
   }
   function targetAccess(c, target) {
+    if (target.membershipVersion === 2) fail(403, 'Use the sustainability v2 member APIs.');
     requireManager(c);
     if (rolesOf(target).includes('puviyan_admin') && !c.superAdmin)
       fail(403, 'Only super admins can manage this user.');
@@ -383,6 +386,7 @@ function createPartnerManagement({
           fail(403, 'Super admin access is required.');
         const old = await tx.get(ref);
         if (orgId && !old.exists) fail(404, 'Organisation not found.');
+        if (old.data()?.membershipVersion === 2) fail(403,'Use the sustainability v2 organisation APIs.');
         tx.set(
           ref,
           {
@@ -784,6 +788,7 @@ function createPartnerManagement({
           tx.get(users.doc(identity.uid)),
         ]);
         const d = link.data();
+        if (old.data()?.membershipVersion === 2) fail(403, 'Use a sustainability v2 invitation.');
         if (
           !d ||
           d.tokenHash !== hash ||
@@ -801,6 +806,7 @@ function createPartnerManagement({
           (org.data().status && org.data().status !== 'active')
         )
           fail(403, 'The invited organisation is not active.');
+        if (org.data()?.membershipVersion === 2) fail(403,'Use a sustainability v2 invitation.');
         if (old.exists && old.data().status && old.data().status !== 'active')
           fail(
             403,

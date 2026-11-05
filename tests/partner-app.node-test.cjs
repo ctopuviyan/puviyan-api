@@ -205,7 +205,7 @@ test('real API entry point mounts the new router with its existing Firebase inst
   const overrides = {
     express: isolatedExpress,
     dotenv: { config() {} },
-    morgan: () => (_req, _res, next) => next(),
+    morgan: Object.assign(() => (_req, _res, next) => next(), { token(name, callback) { assert.equal(name,'url'); assert.equal(callback({originalUrl:'/join?token=secret&x=1'}),'/join?token=[redacted]&x=1'); } }),
     './config/firebase.config': sharedFirebase,
     './routes/partner-app.routes': migrated,
   };
