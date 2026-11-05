@@ -11,7 +11,7 @@
     "test": "jest --coverage",
     "lint": "eslint src/**/*.js",
     "format": "prettier --write \"src/**/*.js\"",
-    "test:partner-app": "node --test tests/partner-app.node-test.cjs tests/partner-management.node-test.cjs tests/sustainability-accounts.node-test.cjs"
+    "test:partner-app": "node --test tests/partner-app.node-test.cjs tests/planting-monitoring.node-test.cjs tests/partner-management.node-test.cjs tests/sustainability-accounts.node-test.cjs"
   },
   "keywords": [
     "puviyan",
@@ -30,12 +30,14 @@
     "express-rate-limit": "^7.1.5",
     "express-validator": "^7.0.1",
     "firebase-admin": "^12.0.0",
+    "geofire-common": "^6.0.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.12",
-    "qrcode": "^1.5.3"
+    "qrcode": "^1.5.3",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "eslint": "^8.56.0",

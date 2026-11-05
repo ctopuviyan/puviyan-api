@@ -9,16 +9,22 @@ const { getPartnerTreeBucket } = require('../services/partner-tree-storage.servi
 const { createPartnerManagement } = require('../services/partner-management.service');
 const { createSustainabilityRouter } = require('./sustainability-accounts.routes');
 const { requirePasswordIdentity } = require('../services/sustainability-accounts.service');
+const { createPlantingMonitoring } = require('../services/planting-monitoring.service');
+const { createPlantingPhotoAssessor } = require('../services/planting-photo-assessment.service');
+const { spatialCells, distance } = require('../services/planting-monitoring-policy');
+const { geohashForLocation } = require('geofire-common');
 
 // Reuse the shared API's initialized Firebase apps; dependencies remain injectable for tests.
 function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
-  getBucket = getPartnerTreeBucket, logger = console, managementOptions = {}, sustainabilityOptions = {} } = {}) {
+  getBucket = getPartnerTreeBucket, logger = console, managementOptions = {}, sustainabilityOptions = {}, monitoringOptions = {} } = {}) {
   const router = express.Router();
   router.use(apiLimiter);
   router.use('/v2', createSustainabilityRouter({db,auth,options:sustainabilityOptions}));
   const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   const projects = db.collection('partnerProjects');
   const management = createPartnerManagement({ db, auth, ...managementOptions });
+  const assess = monitoringOptions.assess || createPlantingPhotoAssessor({ db });
+  const monitoring = createPlantingMonitoring({ db, getBucket, logger, ...monitoringOptions, assess });
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 1, fieldSize: 16 * 1024 } });
   router.use(async (req, _res, next) => {
     try {
@@ -34,6 +40,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
         const org = await db.collection('organizations').doc(membership.data().orgId).get();
         if (!org.exists || org.data().status !== 'active') fail(403,'The organisation is inactive.');
         if (!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) || (req.path === '/account' && req.method !== 'GET')) fail(403,'Use the sustainability v2 account and member APIs.');
+        if (req.method === 'POST' && /\/trees$/.test(req.path)) fail(410,'Update the app to submit planting evidence with a capture session.');
       }
       next();
     } catch (error) { next(error); }
@@ -131,10 +138,12 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     const { ref, project } = await loadProject(req);
     const [events, trees] = await Promise.all([ref.collection('events').limit(500).get(), ref.collection('trees').limit(500).get()]);
     const records = await Promise.all(trees.docs.map(async doc => {
-      const { storagePath, fingerprint, ...record } = doc.data();
+      const { storagePath, contextStoragePath, fingerprint, imageHashes, perceptualHash, contextPerceptualHash, captureSessionId, ...record } = doc.data();
       // Only authenticated, scoped reads mint short-lived URLs; the bucket stays private.
       const [photoUrl] = await getBucket().file(storagePath).getSignedUrl({ action: 'read', expires: Date.now() + 15 * 60 * 1000 });
-      return { id: doc.id, ...record, photoUrl };
+      const result = { id: doc.id, ...record, photoUrl };
+      if (contextStoragePath) [result.contextPhotoUrl] = await getBucket().file(contextStoragePath).getSignedUrl({ action: 'read', expires: Date.now() + 15 * 60 * 1000 });
+      return result;
     }));
     res.json({ project: { id: ref.id, ...project }, events: sortLatest(events.docs.map(serialise)), trees: sortLatest(records) });
   }));
@@ -182,8 +191,18 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
           if (current.data().createdByUid !== req.context.uid || current.data().fingerprint !== fingerprint) fail(409, 'This record ID already has different details.');
           return false;
         }
+        const cell = spatialCells(data);
+        const neighbours = await Promise.all(cell.keys.map(key => tx.get(db.collection('partnerPlantingCells').doc(key))));
+        const nearby = neighbours.flatMap(doc => doc.data()?.points || []);
+        if (nearby.some(point => distance(data, point) <= 5)) fail(409, 'A planting is already registered within five metres. Open the existing record and add a growth observation.');
+        const centre = neighbours.find(doc => doc.id === cell.centre)?.data()?.points || [];
+        if (centre.length >= 200) fail(409, 'This location needs index reconciliation before another registration.');
+        const createdAt = new Date().toISOString();
+        const point = { projectId: ref.id, treeId: treeRef.id, orgId: project.orgId, latitude: data.latitude, longitude: data.longitude, accuracyMeters: data.accuracyMeters };
         tx.create(treeRef, { ...data, projectId: ref.id, orgId: project.orgId, departmentId: project.departmentId || null,
-          storagePath, fingerprint, createdByUid: req.context.uid, createdAt: new Date().toISOString(), verificationStatus: 'submitted' });
+          storagePath, fingerprint, createdByUid: req.context.uid, createdAt, verificationStatus: 'submitted' });
+        tx.set(db.collection('partnerPlantingCells').doc(cell.centre), { points: [...centre, point], updatedAt: createdAt });
+        tx.create(db.collection('partnerPlantingLocations').doc(`${ref.id}_${treeRef.id}`), { ...point, geohash: geohashForLocation([data.latitude, data.longitude]), createdAt });
         return true;
       });
     } catch (error) {
@@ -196,6 +215,30 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     if (!committed) await file.delete({ ignoreNotFound: true }).catch(() => logger.error('Orphan photo', { storagePath }));
     res.status(committed ? 201 : 200).json({ id: treeRef.id, saved: true });
   }));
+  // Planting records and repeat growth observations. New v2 requests require
+  // an app-issued capture session; the original tree endpoint remains compatible.
+  const plantingUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 2, fields: 1, fieldSize: 24 * 1024 } });
+  const parsePlanting = req => { try { return JSON.parse(req.body.metadata); } catch (_) { fail(400, 'Invalid planting details.'); } };
+  router.post('/projects/:id/plantings/captures', wrap(async (req,res) => res.status(201).json(await monitoring.beginCapture(req.context,req.params.id,req.body))));
+  router.post('/projects/:id/plantings', plantingUpload.fields([{name:'photo',maxCount:1},{name:'contextPhoto',maxCount:1}]), wrap(async (req,res) => {
+    const photos=req.files||{}; if(!photos.photo?.[0]) fail(400,'A close-up planting photo is required.');
+    const result=await monitoring.baseline(req.context,req.params.id,parsePlanting(req),photos.photo[0].buffer,photos.contextPhoto?.[0]?.buffer);
+    res.status(result.created?201:200).json(result);
+  }));
+  router.get('/projects/:id/plantings/nearby', wrap(async (req,res) => res.json(await monitoring.nearby(req.context,req.params.id,req.query))));
+  router.get('/projects/:id/plantings/remote-imagery', wrap(async (req,res) => res.json(await monitoring.remoteList(req.context,req.params.id))));
+  router.post('/projects/:id/plantings/remote-imagery', plantingUpload.single('photo'), wrap(async (req,res) => {
+    if(!req.file) fail(400,'An imagery preview is required.');
+    const result=await monitoring.remote(req.context,req.params.id,parsePlanting(req),req.file.buffer);res.status(result.created?201:200).json(result);
+  }));
+  router.get('/projects/:id/plantings/:plantingId', wrap(async (req,res) => res.json(await monitoring.detail(req.context,req.params.id,req.params.plantingId))));
+  router.post('/projects/:id/plantings/:plantingId/observations', plantingUpload.fields([{name:'photo',maxCount:1},{name:'contextPhoto',maxCount:1}]), wrap(async (req,res) => {
+    const photos=req.files||{}; if(!photos.photo?.[0]) fail(400,'A growth photo is required.');
+    const result=await monitoring.observe(req.context,req.params.id,req.params.plantingId,parsePlanting(req),photos.photo[0].buffer,photos.contextPhoto?.[0]?.buffer);
+    res.status(result.created?201:200).json(result);
+  }));
+  router.post('/projects/:id/plantings/:plantingId/observations/:observationId/review', wrap(async (req,res) => res.json(await monitoring.review(req.context,req.params.id,req.params.plantingId,req.params.observationId,req.body))));
+  router.patch('/projects/:id/plantings/:plantingId/schedule', wrap(async (req,res) => res.json(await monitoring.schedule(req.context,req.params.id,req.params.plantingId,req.body))));
   // Limit this error mapping to the new namespace; keep legacy route behaviour intact.
   router.use((error, _req, res, _next) => {
     const status = error instanceof multer.MulterError ? 400 : error.status || 500;
