@@ -63,6 +63,8 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Invitation URLs contain bearer tokens; keep them out of application request logs.
+morgan.token('url', req => (req.originalUrl || req.url).replace(/([?&]token=)[^&]*/gi, '$1[redacted]'));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Serve static files from public directory (testing UI)

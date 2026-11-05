@@ -38,3 +38,7 @@ Existing portal `/signup/validate` understands role arrays and revocation. Exist
 Automated checks run with `npm run test:partner-app`. Use isolated, disposable staging users/organisations when testing full native journeys. No consumer or production data migration is required. The existing list limits remain 500 records for management lists and 200 for own-request history; pagination is a follow-up for larger deployments.
 
 Pending invitations require an active issuer who still has authority over the approved roles and organisation. Another administrator can renew the invitation to take responsibility for it. Self-invitations cannot grant additional access. Unassigned legacy accounts receive only the roles explicitly approved for their new organisation.
+
+## New sustainability signup
+
+The revised email/password self-service organisation flow uses separate v2 endpoints. See [Sustainability accounts v2](SUSTAINABILITY_ACCOUNTS_V2.md). The policies above apply to legacy memberships; v2 memberships and organisations are guarded against legacy invite-code, org-link and role-edit paths.

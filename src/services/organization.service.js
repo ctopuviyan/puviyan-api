@@ -121,6 +121,8 @@ async function updateOrganization(orgId, updates, updatedBy) {
     throw new ApiError(HTTP_STATUS.NOT_FOUND, ERROR_CODES.VALIDATION_ERROR, 'Organization not found');
   }
 
+  if (orgDoc.data().membershipVersion === 2) throw new ApiError(403, ERROR_CODES.AUTH_FORBIDDEN, 'Use the sustainability v2 organisation APIs.');
+
   // Don't allow changing certain fields
   const disallowedFields = ['createdAt', 'createdBy'];
   disallowedFields.forEach(field => delete updates[field]);
