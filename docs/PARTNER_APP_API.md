@@ -1,6 +1,6 @@
 # Partner mobile API
 
-The Flutter `iampuviyan-partner` app uses a separately deployed `puviyan-partner-api-stage` Cloud Run service in GCP project `puviyan-partner-stage`. The service uses `puviyan-partner-stage` for Firebase Auth, Firestore, and Storage. It has no dependency on consumer project data.
+The Flutter `iampuviyan-partner` app uses a separately deployed `puviyan-partner-api-stage` Cloud Run service in GCP project `puviyan-partner-stage` (`https://puviyan-partner-api-stage-sbkl4nndtq-el.a.run.app`). The service is configured to use `puviyan-partner-stage` for Firebase Auth, Firestore, and Storage. It has no dependency on consumer project data. `/health` reports `service=partner`; the rewards route returns 404 as expected.
 
 ## Routes
 
@@ -28,14 +28,14 @@ Collections are `partnerProjects/{projectId}`, with `events` and `trees` subcoll
 
 ## Staging rollout
 
-1. Deploy with `./deploy-partner-api.sh stage`; this targets Cloud Run in GCP project `puviyan-partner-stage` and sets both Firebase project IDs to that partner project.
-2. Tree evidence uses the private Firebase Storage bucket `puviyan-partner-stage.firebasestorage.app` by default. Confirm it is private and accessible to the Cloud Run runtime identity before enabling uploads. Tree photo links are temporary signed URLs.
-3. Ensure the runtime identity can read/write partner Firestore and manage objects in the partner bucket. ADC signers may require `iam.serviceAccounts.signBlob`.
-4. Set the Flutter app's `API_BASE_URL` to the exact `/api/v1` URL returned by Cloud Run after the service is deployed. Signup calls use the root paths; project and tree calls append `/partner-app` automatically.
+1. The service is deployed with `./deploy-partner-api.sh stage`; this targets Cloud Run in `puviyan-partner-stage` and sets both Firebase project IDs to that partner project.
+2. Firestore-backed routes currently fail because the Cloud Run runtime identity has no Firestore permission. Configure the dedicated runtime identity and narrowly scoped access before end-to-end use.
+3. Photo storage is not provisioned. The bucket name currently configured for planting uploads was not found in the partner project, and the default profile-image bucket is also absent. Approve a private bucket design before enabling uploads; tree photo links use temporary signed URLs.
+4. The Flutter staging config now targets `https://puviyan-partner-api-stage-sbkl4nndtq-el.a.run.app/api/v1`. Signup calls use the root paths; project and tree calls append `/partner-app` automatically.
 
 Photo storage is resolved lazily. Missing `PARTNER_TREE_PHOTO_BUCKET` returns 503 on photo operations; it does not prevent API startup, existing endpoints, or empty project/event operations. No service-account key belongs in the mobile app. Keep direct mobile Firestore/Storage access denied for the project records and photo paths.
 
-The staging deploy is currently blocked because Cloud Run API is disabled in `puviyan-partner-stage` and the active Google identity lacks access to enable it. Deployment also requires the necessary Cloud Run, Cloud Build, and Artifact Registry permissions. No production service is being deployed. Firebase mobile registration and real-device login/camera/GPS checks are still required. Lists currently cap at 500 records and offline capture persistence is not implemented.
+The service is deployed, but Firestore access and photo storage are pending. No production service is being deployed. Firebase mobile registration and real-device login/camera/GPS checks are still required. Lists currently cap at 500 records and offline capture persistence is not implemented.
 
 ## Local verification
 
