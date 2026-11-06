@@ -25,11 +25,14 @@ if [ "$ENVIRONMENT" == "stage" ]; then
   ENV_FILE=".env.stage"
   SERVICE_ACCOUNT="service-account-stage.json"
   PROJECT_ID="puviyan-stage"
+  SERVICE_NAME="puviyan-api-staging"
+  PARTNER_TREE_PHOTO_BUCKET="${PARTNER_TREE_PHOTO_BUCKET:-puviyan-stage-partner-tree-photos}"
   STAGE_AI_ENV=",PLANTING_AI_ENABLED=false"
 elif [ "$ENVIRONMENT" == "prod" ]; then
   ENV_FILE=".env.production"
   SERVICE_ACCOUNT="service-account-prod.json"
   PROJECT_ID="puviyan-prod"
+  SERVICE_NAME="puviyan-api-prod"
   STAGE_AI_ENV=""
 fi
 
@@ -65,12 +68,12 @@ echo "🚀 Deploying to $ENVIRONMENT..."
 if command -v gcloud &> /dev/null; then
   echo "Deploying to Cloud Run..."
   
-  gcloud run deploy puviyan-api-$ENVIRONMENT \
+  gcloud run deploy "$SERVICE_NAME" \
     --source . \
     --platform managed \
     --region asia-south1 \
     --project $PROJECT_ID \
-    --update-env-vars NODE_ENV=$ENVIRONMENT,FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID,PARTNER_FIREBASE_PROJECT_ID=$PARTNER_FIREBASE_PROJECT_ID,ORG_INVITE_CODE_SALT=$ORG_INVITE_CODE_SALT,PARTNER_PORTAL_URL=$PARTNER_PORTAL_URL,SMTP_HOST=$SMTP_HOST,SMTP_PORT=$SMTP_PORT,SMTP_SECURE=$SMTP_SECURE,SMTP_USER=$SMTP_USER,SMTP_PASSWORD=$SMTP_PASSWORD$STAGE_AI_ENV \
+    --update-env-vars NODE_ENV=$ENVIRONMENT,FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID,PARTNER_FIREBASE_PROJECT_ID=$PARTNER_FIREBASE_PROJECT_ID,ORG_INVITE_CODE_SALT=$ORG_INVITE_CODE_SALT,PARTNER_PORTAL_URL=$PARTNER_PORTAL_URL,SMTP_HOST=$SMTP_HOST,SMTP_PORT=$SMTP_PORT,SMTP_SECURE=$SMTP_SECURE,SMTP_USER=$SMTP_USER,SMTP_PASSWORD=$SMTP_PASSWORD,PARTNER_TREE_PHOTO_BUCKET=$PARTNER_TREE_PHOTO_BUCKET$STAGE_AI_ENV \
     --allow-unauthenticated \
     --max-instances 10 \
     --memory 512Mi \
