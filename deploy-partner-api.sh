@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the isolated Partner App API to Cloud Run.
+# Deploy the isolated Partner App API inside the partner Firebase/GCP staging project.
 # Usage: ./deploy-partner-api.sh stage
 set -euo pipefail
 
@@ -11,10 +11,10 @@ if [[ "$ENVIRONMENT" != "stage" ]]; then
 fi
 
 ENV_FILE=".env.stage"
-PROJECT_ID="puviyan-stage"
+PROJECT_ID="puviyan-partner-stage"
 SERVICE_NAME="puviyan-partner-api-stage"
 REGION="asia-south1"
-PHOTO_BUCKET="${PARTNER_TREE_PHOTO_BUCKET:-puviyan-stage-partner-tree-photos}"
+PHOTO_BUCKET="${PARTNER_TREE_PHOTO_BUCKET:-puviyan-partner-stage.firebasestorage.app}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE" >&2
@@ -37,13 +37,13 @@ const dotenv = require('dotenv');
 const source = fs.readFileSync(process.env.ENV_SOURCE_FILE, 'utf8');
 const parsed = dotenv.parse(source);
 const keys = [
-  'API_VERSION', 'FIREBASE_PROJECT_ID', 'PARTNER_FIREBASE_PROJECT_ID',
+  'API_VERSION', 'PARTNER_FIREBASE_PROJECT_ID',
   'ORG_INVITE_CODE_SALT', 'PARTNER_API_KEY_SALT', 'PARTNER_PORTAL_URL',
   'SMTP_HOST', 'SMTP_PORT', 'SMTP_SECURE', 'SMTP_USER', 'SMTP_PASSWORD',
   'JWT_SECRET', 'JWT_EXPIRY', 'RATE_LIMIT_WINDOW_MS', 'RATE_LIMIT_MAX_REQUESTS',
   'PARTNER_APP_SIGNUP_URL'
 ];
-for (const key of ['FIREBASE_PROJECT_ID', 'PARTNER_FIREBASE_PROJECT_ID', 'ORG_INVITE_CODE_SALT']) {
+for (const key of ['PARTNER_FIREBASE_PROJECT_ID', 'ORG_INVITE_CODE_SALT']) {
   if (!parsed[key]) throw new Error(`${key} missing in ${process.env.ENV_SOURCE_FILE}`);
 }
 const env = {};
@@ -51,6 +51,8 @@ for (const key of keys) if (parsed[key] !== undefined) env[key] = parsed[key];
 Object.assign(env, {
   NODE_ENV: 'staging',
   API_SERVICE_SURFACE: 'partner',
+  FIREBASE_PROJECT_ID: 'puviyan-partner-stage',
+  PARTNER_FIREBASE_PROJECT_ID: 'puviyan-partner-stage',
   PARTNER_TREE_PHOTO_BUCKET: process.env.PHOTO_BUCKET,
   PLANTING_AI_ENABLED: 'false'
 });
