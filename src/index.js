@@ -26,6 +26,7 @@ const redemptionRoutes = require('./routes/redemption.routes');
 const partnerRoutes = require('./routes/partner.routes');
 const partnerPortalRoutes = require('./routes/partner-portal.routes');
 const { createPartnerAppRouter } = require('./routes/partner-app.routes');
+const signupController = require('./controllers/signup.controller');
 const pointsRoutes = require('./routes/points.routes');
 const adminRoutes = require('./routes/admin.routes');
 const uploadRoutes = require('./routes/upload.routes');
@@ -36,6 +37,7 @@ const userProfileRoutes = require('./routes/user-profile.routes');
 const app = express();
 const PORT = process.env.PORT || 8080;
 const API_VERSION = process.env.API_VERSION || 'v1';
+const API_SERVICE_SURFACE = process.env.API_SERVICE_SURFACE || 'shared';
 
 // Initialize Firebase Admin SDK (for consumer app)
 initializeFirebase();
@@ -75,23 +77,37 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: API_VERSION
+    version: API_VERSION,
+    service: API_SERVICE_SURFACE
   });
 });
 
-// API routes
-app.use(`/api/${API_VERSION}/rewards`, rewardsRoutes);
-app.use(`/api/${API_VERSION}/rewards-management`, rewardsManagementRoutes);
-app.use(`/api/${API_VERSION}/redemption`, redemptionRoutes);
-app.use(`/api/${API_VERSION}/partners`, partnerRoutes);
-app.use(`/api/${API_VERSION}/partner`, partnerPortalRoutes);
-app.use(`/api/${API_VERSION}/partner-app`, createPartnerAppRouter());
-app.use(`/api/${API_VERSION}/points`, pointsRoutes);
-app.use(`/api/${API_VERSION}/admin`, adminRoutes);
-app.use(`/api/${API_VERSION}/upload`, uploadRoutes);
-app.use(`/api/${API_VERSION}/organizations`, organizationRoutes);
-app.use(`/api/${API_VERSION}/user`, userProfileRoutes);
-app.use(`/api/${API_VERSION}`, signupRoutes);
+if (API_SERVICE_SURFACE === 'partner') {
+  // The partner API has its own Cloud Run lifecycle. Expose the authenticated
+  // partner-app surface and the shared partner signup/profile-photo endpoints;
+  // consumer rewards, points, redemption, and admin routes stay on puviyan-api.
+  app.use(`/api/${API_VERSION}/partner-app`, createPartnerAppRouter());
+  app.use(`/api/${API_VERSION}/upload`, uploadRoutes);
+  // Mount only the public invite onboarding endpoints required by the mobile app.
+  // Keep legacy consumer/portal admin signup routes on the shared API.
+  app.get(`/api/${API_VERSION}/public/organizations`, signupController.getPublicOrganizations);
+  app.post(`/api/${API_VERSION}/signup/request`, signupController.submitSignupRequest);
+  app.get(`/api/${API_VERSION}/signup/validate`, signupController.validateSignupToken);
+} else {
+  // Shared consumer and portal API.
+  app.use(`/api/${API_VERSION}/rewards`, rewardsRoutes);
+  app.use(`/api/${API_VERSION}/rewards-management`, rewardsManagementRoutes);
+  app.use(`/api/${API_VERSION}/redemption`, redemptionRoutes);
+  app.use(`/api/${API_VERSION}/partners`, partnerRoutes);
+  app.use(`/api/${API_VERSION}/partner`, partnerPortalRoutes);
+  app.use(`/api/${API_VERSION}/partner-app`, createPartnerAppRouter());
+  app.use(`/api/${API_VERSION}/points`, pointsRoutes);
+  app.use(`/api/${API_VERSION}/admin`, adminRoutes);
+  app.use(`/api/${API_VERSION}/upload`, uploadRoutes);
+  app.use(`/api/${API_VERSION}/organizations`, organizationRoutes);
+  app.use(`/api/${API_VERSION}/user`, userProfileRoutes);
+  app.use(`/api/${API_VERSION}`, signupRoutes);
+}
 
 // 404 handler
 app.use((req, res) => {
