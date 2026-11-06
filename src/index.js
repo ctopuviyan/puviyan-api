@@ -6,15 +6,19 @@ const morgan = require('morgan');
 const path = require('path');
 const fs = require('fs');
 
-// Load environment-specific .env file
-const envFiles = process.env.NODE_ENV === 'production'
-  ? ['.env.production']
-  : process.env.NODE_ENV === 'staging'
-    ? ['.env.staging', '.env.stage']
-    : ['.env'];
+// Load local .env files for development only. Cloud Run receives its config
+// through service environment variables and must use its runtime identity;
+// loading a source-tree .env file could select an unrelated service account.
+if (!process.env.K_SERVICE) {
+  const envFiles = process.env.NODE_ENV === 'production'
+    ? ['.env.production']
+    : process.env.NODE_ENV === 'staging'
+      ? ['.env.staging', '.env.stage']
+      : ['.env'];
 
-const envFile = envFiles.find(file => fs.existsSync(path.resolve(process.cwd(), file))) || envFiles[0];
-require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
+  const envFile = envFiles.find(file => fs.existsSync(path.resolve(process.cwd(), file))) || envFiles[0];
+  require('dotenv').config({ path: path.resolve(process.cwd(), envFile) });
+}
 
 const { initializeFirebase, initializePartnerFirebase } = require('./config/firebase.config');
 const { errorHandler } = require('./middleware/error.middleware');

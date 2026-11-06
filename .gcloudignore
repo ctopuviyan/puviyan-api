@@ -19,6 +19,7 @@ node_modules/
 *.log
 npm-debug.log*
 .env
+.env.*
 .env.local
 .env.development
 .env.test
@@ -43,7 +44,6 @@ docs/
 # Scripts (keep the ones we need)
 scripts/
 
-# IMPORTANT: Include service account files for deployment
-# These are needed for Firebase authentication
-!service-account-stage.json
-!service-account-partner-stage.json
+# Never upload environment files or service-account keys. Cloud Run uses
+# Application Default Credentials from its configured runtime service account.
+*service-account*.json

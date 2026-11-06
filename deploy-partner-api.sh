@@ -14,7 +14,7 @@ ENV_FILE=".env.stage"
 PROJECT_ID="puviyan-partner-stage"
 SERVICE_NAME="puviyan-partner-api-stage"
 REGION="asia-south1"
-PHOTO_BUCKET="${PARTNER_TREE_PHOTO_BUCKET:-puviyan-partner-stage.firebasestorage.app}"
+PHOTO_BUCKET="${PARTNER_TREE_PHOTO_BUCKET:-puviyan-partner-stage-partner-photos}"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "Missing $ENV_FILE" >&2
@@ -53,7 +53,9 @@ Object.assign(env, {
   API_SERVICE_SURFACE: 'partner',
   FIREBASE_PROJECT_ID: 'puviyan-partner-stage',
   PARTNER_FIREBASE_PROJECT_ID: 'puviyan-partner-stage',
+  FIREBASE_STORAGE_BUCKET: process.env.PHOTO_BUCKET,
   PARTNER_TREE_PHOTO_BUCKET: process.env.PHOTO_BUCKET,
+  PARTNER_APP_SIGNUP_URL: 'https://puviyan-partner-api-stage-sbkl4nndtq-el.a.run.app/api/v1/partner-app/v2/join',
   PLANTING_AI_ENABLED: 'false'
 });
 fs.writeFileSync(process.env.ENV_OUTPUT_FILE, JSON.stringify(env));
@@ -68,7 +70,8 @@ gcloud run deploy "$SERVICE_NAME" \
   --allow-unauthenticated \
   --max-instances 10 \
   --memory 512Mi \
-  --timeout 60
+  --timeout 60 \
+  --service-account puviyan-partner-api-runtime@puviyan-partner-stage.iam.gserviceaccount.com
 
 echo "Partner API staging deployment completed."
-echo "Verify the service URL and /health in Cloud Run before updating the app config."
+echo "Confirm /health and partner Firebase access before end-to-end app testing."

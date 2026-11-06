@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const { admin } = require('../config/firebase.config');
 const { ApiError } = require('../middleware/error.middleware');
 const { HTTP_STATUS, ERROR_CODES } = require('../config/constants');
@@ -25,24 +26,24 @@ async function uploadImage(fileBuffer, fileName, folder = 'rewards', mimeType = 
     
     const file = bucket.file(storagePath);
     
-    // Upload file
+    const downloadToken = generateToken();
     await file.save(fileBuffer, {
       metadata: {
         contentType: mimeType,
-        metadata: {
-          firebaseStorageDownloadTokens: generateToken()
-        }
-      },
-      public: true
+        metadata: { firebaseStorageDownloadTokens: downloadToken }
+      }
     });
-    
-    // Make file publicly accessible
+
+    // Keep profile images in the partner service's private bucket. Firebase's
+    // download token grants access to this object without making the bucket or
+    // object public through Cloud Storage IAM/ACLs. Preserve legacy behavior for
+    // the shared consumer/portal API.
+    if (process.env.API_SERVICE_SURFACE === 'partner') {
+      return `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(downloadToken)}`;
+    }
+
     await file.makePublic();
-    
-    // Get public URL
-    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-    
-    return publicUrl;
+    return `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
   } catch (error) {
     console.error('Error uploading image:', error);
     throw new ApiError(
@@ -87,7 +88,7 @@ async function deleteImage(imageUrl) {
  * Generate random token for Firebase Storage
  */
 function generateToken() {
-  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+  return crypto.randomBytes(32).toString('hex');
 }
 
 /**
