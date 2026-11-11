@@ -25,7 +25,7 @@ function createPlantingPhotoAssessor({
     const form = new FormData();
     for (const [i, photo] of photos
       .filter((p) => !p.reference)
-      .slice(0, 2)
+      .slice(0, 1)
       .entries()) {
       form.append(
         "images",
@@ -40,12 +40,15 @@ function createPlantingPhotoAssessor({
     );
     url.searchParams.set("api-key", plantNetKey);
     url.searchParams.set("nb-results", "3");
+    url.searchParams.set("detailed", "true");
     try {
       const response = await fetchImpl(url, {
         method: "POST",
         body: form,
         signal: AbortSignal.timeout(15000),
       });
+      if (response.status === 404)
+        return { noSpeciesMatch: true, candidates: [], familySuggestions: [] };
       if (!response.ok) return { unavailable: true };
       const payload = await response.json();
       const candidates = (payload.results || [])
@@ -60,8 +63,27 @@ function createPlantingPhotoAssessor({
             : null;
         })
         .filter(Boolean);
+      const familySuggestions = [
+        ...(payload.results || []).map((item) => item.species?.family),
+        ...(payload.otherResults?.family || []).map((item) =>
+          item.family || item.species?.family || item,
+        ),
+      ]
+        .map((family) =>
+          typeof family === "string"
+            ? family
+            : family?.scientificNameWithoutAuthor ||
+              family?.scientificName ||
+              family?.name,
+        )
+        .filter(
+          (name, index, all) =>
+            typeof name === "string" && all.indexOf(name) === index,
+        )
+        .slice(0, 3);
       return {
         candidates,
+        familySuggestions,
         provider: "plantnet",
         model: payload.version || null,
       };
@@ -228,6 +250,7 @@ function createPlantingPhotoAssessor({
         ...(plantnet?.unavailable
           ? ["species_identification_unavailable"]
           : []),
+        ...(plantnet?.noSpeciesMatch ? ["plantnet_no_species_match"] : []),
       ]),
     ];
     if (!visual && !plantnet?.candidates?.length)
@@ -248,6 +271,7 @@ function createPlantingPhotoAssessor({
         "Species suggestions are available; visual verification needs human review.",
       flags,
       speciesSuggestions,
+      familySuggestions: plantnet?.familySuggestions || [],
       visiblePlant: visual?.visiblePlant ?? null,
       likelyStage: visual?.likelyStage || null,
       imageQuality: visual?.imageQuality || null,

@@ -14,6 +14,8 @@ function createSustainabilityRouter({ db, auth, options = {} }) {
       res.json(await service.validateInvitation(req.body.token))
     )
   );
+  router.post('/email-verification/send', wrap(async (req, res) => res.json(await service.sendEmailVerificationCode(req.body))));
+  router.post('/email-verification/verify', wrap(async (req, res) => res.json(await service.verifyEmailVerificationCode(req.body))));
   // A working email landing page also supports mobile builds without universal links.
   // Tokens stay out of subresource referrers and the browser must not cache invite details.
   router.get(
@@ -25,6 +27,9 @@ function createSustainabilityRouter({ db, auth, options = {} }) {
         'X-Robots-Tag': 'noindex, nofollow',
       });
       const value = await service.validateInvitation(req.query.token);
+      const roleDescription = value.role === 'sustainability_action_owner'
+        ? 'the new sustainability action owner. Accepting this invitation transfers ownership, deactivates the current owner, and disables their Firebase sign-in.'
+        : `an organisation ${value.role === 'org_admin' ? 'admin' : 'analyst'}`;
       const escape = (value) =>
         String(value).replace(
           /[&<>"']/g,
@@ -45,7 +50,7 @@ function createSustainabilityRouter({ db, auth, options = {} }) {
         })
         .type('html')
         .send(
-          `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Join iampuviyan Partner</title><style>body{background:#1a1a1a;color:#fff;font:16px system-ui;padding:32px;line-height:1.6}main{max-width:480px;margin:48px auto}small{color:#48c84f;letter-spacing:3px}textarea{box-sizing:border-box;width:100%;padding:14px;background:#232323;color:#fff;border:1px solid #48c84f;border-radius:8px;word-break:break-all}p{color:#ccc}</style></head><body><main><small>IAMPuVIYAN PARTNER</small><h1>You’re invited</h1><p>Join ${escape(value.organisation.name)} as an organisation ${value.role === 'org_admin' ? 'admin' : 'analyst'}.</p><p>Open <strong>iampuviyan Partner</strong>, choose <strong>I have an invitation</strong>, and paste this invitation token to create your email/password account.</p><textarea aria-label="Invitation token" readonly rows="3">${escape(req.query.token)}</textarea><p>Use ${escape(value.email)} when signing up. This invitation can be used once and expires on ${escape(value.expiresAt.slice(0, 10))}.</p></main></body></html>`
+          `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Join iampuviyan Partner</title><style>body{background:#1a1a1a;color:#fff;font:16px system-ui;padding:32px;line-height:1.6}main{max-width:480px;margin:48px auto}small{color:#48c84f;letter-spacing:3px}textarea{box-sizing:border-box;width:100%;padding:14px;background:#232323;color:#fff;border:1px solid #48c84f;border-radius:8px;word-break:break-all}p{color:#ccc}</style></head><body><main><small>IAMPuVIYAN PARTNER</small><h1>You’re invited</h1><p>Join ${escape(value.organisation.name)} as ${escape(roleDescription)}.</p><p>Open <strong>iampuviyan Partner</strong>, choose <strong>I have an invitation</strong>, and paste this invitation token to create your email/password account.</p><textarea aria-label="Invitation token" readonly rows="3">${escape(req.query.token)}</textarea><p>Use ${escape(value.email)} when signing up. This invitation can be used once and expires on ${escape(value.expiresAt.slice(0, 10))}.</p></main></body></html>`
         );
     })
   );
@@ -105,6 +110,10 @@ function createSustainabilityRouter({ db, auth, options = {} }) {
       res.json(await service.listInvitations(req.identity))
     )
   );
+  router.get('/providers/search', wrap(async (req, res) => res.json(await service.searchProviders(req.identity, req.query.q))));
+  router.get('/collaborators', wrap(async (req, res) => res.json(await service.listCollaborators(req.identity))));
+  router.post('/collaborators', wrap(async (req, res) => res.status(201).json(await service.addCollaborator(req.identity, req.body))));
+  router.patch('/collaborators/:providerOrgId', wrap(async (req, res) => res.json(await service.updateCollaborator(req.identity, req.params.providerOrgId, req.body))));
   router.post(
     '/invitations',
     wrap(async (req, res) =>

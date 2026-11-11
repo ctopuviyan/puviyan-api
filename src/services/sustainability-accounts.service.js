@@ -3,7 +3,10 @@ const { fail, text } = require('./partner-project-policy');
 const ACTION_OWNER = 'sustainability_action_owner';
 const SERVICE_PROVIDER = 'sustainability_service_provider';
 const INVITED_ROLES = ['org_admin', 'org_analyst'];
+const OWNER_INVITABLE_ROLES = [...INVITED_ROLES, ACTION_OWNER];
 const OWNER_ROLES = [ACTION_OWNER, SERVICE_PROVIDER];
+const PROVIDER_SERVICES = ['NGO services', 'ESG services', 'Environmental services'];
+const hasAccountType = (org, type) => org?.accountType === type || org?.accountTypes?.includes(type) === true;
 const membershipV2 = (value) => value?.membershipVersion === 2;
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 function identifier(value) {
@@ -44,6 +47,9 @@ function member(uid, data) {
     lastName: data.lastName,
     name: data.name,
     title: data.title,
+    lineOfBusiness: data.lineOfBusiness || null,
+    accountTypes: data.accountTypes || data.roles || [data.role],
+    serviceTypes: data.serviceTypes || [],
     photoURL: data.photoURL || null,
     orgId: data.orgId,
     role: data.role,
@@ -57,6 +63,10 @@ function organisation(id, data) {
     id,
     name: data.name,
     accountType: data.accountType,
+    accountTypes: data.accountTypes || [data.accountType],
+    lineOfBusiness: data.lineOfBusiness || null,
+    serviceType: data.serviceType || null,
+    serviceTypes: data.serviceTypes || (data.serviceType ? [data.serviceType] : []),
     status: data.status,
   };
 }
@@ -82,11 +92,10 @@ async function requirePasswordIdentity(auth, identity) {
   const providers = record.providerData || [];
   if (
     record.disabled ||
-    !providers.length ||
-    providers.some((p) => p.providerId !== 'password') ||
+    !providers.some((p) => p.providerId === 'password') ||
     email(record.email) !== email(identity.email)
   ) {
-    fail(403, 'An active email/password-only identity is required.');
+    fail(403, 'An active email/password identity is required. Google-only accounts are not supported in this app.');
   }
   return { uid: record.uid, email: email(record.email) };
 }
@@ -97,12 +106,18 @@ function createSustainabilityAccounts({
   signupUrl = process.env.PARTNER_APP_SIGNUP_URL,
   sendInvitation = (data) =>
     require('./email.service').sendSignupLinkEmail(data),
+  sendEmailOtp = (data) =>
+    require('./email.service').sendEmailVerificationCode(data),
+  randomOtp = () => crypto.randomInt(0, 1000000).toString().padStart(6, '0'),
   randomId = () => crypto.randomUUID().replace(/-/g, ''),
 } = {}) {
   const users = db.collection('partnerUsers'),
+    v2Users = db.collection('partnerV2Users'),
     orgs = db.collection('organizations');
   const invites = db.collection('partnerV2Invitations'),
-    keys = db.collection('partnerV2InvitationKeys');
+    keys = db.collection('partnerV2InvitationKeys'),
+    collaborators = db.collection('partnerV2Collaborators'),
+    emailOtps = db.collection('partnerV2EmailOtps');
   const legacy = (uid) => db.collection('partner_users').doc(uid);
   const time = () => now().toISOString();
   function audit(tx, uid, action, orgId, target, data = {}) {
@@ -115,11 +130,27 @@ function createSustainabilityAccounts({
       createdAt: time(),
     });
   }
+  const otpPurpose = (invitationId) => invitationId ? `invitation:${invitationId}` : 'registration';
+  const otpRef = (address, purpose) => emailOtps.doc(hash(`${address}:${purpose}`));
+  const otpDigest = (ref, code) => hash(`${process.env.ORG_INVITE_CODE_SALT || process.env.JWT_SECRET || 'local-email-otp'}:${ref.id}:${code}`);
+  async function consumeEmailVerification(tx, address, token, invitationId = null) {
+    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{40,}$/.test(token))
+      fail(403, 'Verify your email with the one-time code before continuing.');
+    const ref = otpRef(address, otpPurpose(invitationId)), doc = await tx.get(ref), data = doc.data();
+    if (!doc.exists || !data.verified || data.consumedAt || data.email !== address || data.purpose !== otpPurpose(invitationId) || data.verificationTokenHash !== hash(token) || Date.parse(data.expiresAt) <= now().getTime())
+      fail(403, 'Your email verification expired or was already used. Request a new code.');
+    tx.update(ref, { consumedAt: time(), verificationTokenHash: null });
+  }
   async function session(identity) {
     return requirePasswordIdentity(auth, identity);
   }
+  async function membershipDoc(tx, uid) {
+    const scoped = await tx.get(v2Users.doc(uid));
+    if (scoped.exists) return scoped;
+    return tx.get(users.doc(uid));
+  }
   async function access(tx, identity, owner = false) {
-    const doc = await tx.get(users.doc(identity.uid));
+    const doc = await membershipDoc(tx, identity.uid);
     const user = doc.data();
     if (!doc.exists || !membershipV2(user) || user.status !== 'active')
       fail(403, 'An active sustainability membership is required.');
@@ -130,15 +161,11 @@ function createSustainabilityAccounts({
       org.data().status !== 'active'
     )
       fail(403, 'The organisation is not active.');
-    if (
-      owner &&
-      (org.data().accountType !== ACTION_OWNER ||
-        user.role !== ACTION_OWNER ||
-        !org.data().ownerUids?.includes(identity.uid))
-    ) {
+    if (owner && (!OWNER_ROLES.includes(org.data().accountType) ||
+      user.role !== org.data().accountType || !org.data().ownerUids?.includes(identity.uid))) {
       fail(
         403,
-        'Only a sustainability action owner can invite and manage members.'
+        'Only the organisation owner can invite and manage members.'
       );
     }
     return { doc, user, org, orgId: org.id };
@@ -210,7 +237,7 @@ function createSustainabilityAccounts({
       Date.parse(data.expiresAt) <= now().getTime()
     )
       fail(409, 'The invitation is expired, revoked or already used.');
-    if (!INVITED_ROLES.includes(data.role))
+    if (!OWNER_INVITABLE_ROLES.includes(data.role))
       fail(403, 'This invitation cannot grant that role.');
   }
   async function linkIn(tx, ref, token) {
@@ -220,16 +247,16 @@ function createSustainabilityAccounts({
       fail(404, 'Invalid invitation.');
     checkLink(data);
     const org = await tx.get(orgs.doc(identifier(data.orgId)));
-    const issuer = await tx.get(users.doc(identifier(data.createdBy)));
+    const issuer = await membershipDoc(tx, identifier(data.createdBy));
     if (
       !org.exists ||
       !membershipV2(org.data()) ||
       org.data().status !== 'active' ||
-      org.data().accountType !== ACTION_OWNER ||
+      !OWNER_ROLES.includes(org.data().accountType) ||
       !issuer.exists ||
       !membershipV2(issuer.data()) ||
       issuer.data().status !== 'active' ||
-      issuer.data().role !== ACTION_OWNER ||
+      issuer.data().role !== org.data().accountType ||
       issuer.data().orgId !== org.id ||
       !org.data().ownerUids?.includes(issuer.id)
     )
@@ -247,6 +274,76 @@ function createSustainabilityAccounts({
     return found.docs[0].ref;
   }
   return {
+    async sendEmailVerificationCode(body) {
+      fields(body, ['email', 'invitationToken']);
+      const address = email(body.email);
+      let invitationId = null, orgName = null;
+      if (body.invitationToken != null) {
+        const ref = await findLink(body.invitationToken);
+        const result = await db.runTransaction((tx) => linkIn(tx, ref, body.invitationToken));
+        if (result.data.email !== address) fail(403, 'Use the email address on this invitation.');
+        invitationId = ref.id;
+        orgName = result.org.data().name || null;
+      }
+      const purpose = otpPurpose(invitationId), ref = otpRef(address, purpose), code = randomOtp(), stamp = now();
+      const codeHash = otpDigest(ref, code);
+      await db.runTransaction(async (tx) => {
+        const current = await tx.get(ref), old = current.data();
+        const sentAt = Date.parse(old?.sentAt || '');
+        if (Number.isFinite(sentAt) && stamp.getTime() - sentAt < 60_000) fail(429, 'Wait a minute before requesting another verification code.');
+        const windowStart = Date.parse(old?.windowStart || '');
+        const sends = Number.isFinite(windowStart) && stamp.getTime() - windowStart < 60 * 60_000 ? (old.sendCount || 0) : 0;
+        if (sends >= 5) fail(429, 'Too many verification codes requested. Try again in an hour.');
+        tx.set(ref, { email: address, purpose, invitationId, codeHash, sentAt: stamp.toISOString(), expiresAt: new Date(stamp.getTime() + 10 * 60_000).toISOString(), attempts: 0, verified: false, verificationTokenHash: null, consumedAt: null, windowStart: sends ? old.windowStart : stamp.toISOString(), sendCount: sends + 1 });
+      });
+      try {
+        const sent = await sendEmailOtp({ to: address, code, expiresInMinutes: 10, organisationName: orgName });
+        if (sent?.success !== true) throw new Error('SMTP delivery failed.');
+      } catch (_) {
+        await ref.set({ codeHash: null, deliveryFailed: true }, { merge: true }).catch(() => {});
+        fail(503, 'We could not send the verification code. Please try again shortly.');
+      }
+      return { sent: true, expiresInSeconds: 600, resendAfterSeconds: 60 };
+    },
+    async verifyEmailVerificationCode(body) {
+      fields(body, ['email', 'code', 'invitationToken']);
+      const address = email(body.email), code = body.code;
+      if (typeof code !== 'string' || !/^\d{6}$/.test(code)) fail(400, 'Enter the six-digit code from your email.');
+      let invitationId = null;
+      if (body.invitationToken != null) {
+        const ref = await findLink(body.invitationToken);
+        const result = await db.runTransaction((tx) => linkIn(tx, ref, body.invitationToken));
+        if (result.data.email !== address) fail(403, 'Use the email address on this invitation.');
+        invitationId = ref.id;
+      }
+      const ref = otpRef(address, otpPurpose(invitationId)), token = crypto.randomBytes(32).toString('base64url');
+      const outcome = await db.runTransaction(async (tx) => {
+        const doc = await tx.get(ref), data = doc.data();
+        if (!doc.exists || data.email !== address || data.purpose !== otpPurpose(invitationId) || data.consumedAt || data.verified || Date.parse(data.expiresAt) <= now().getTime()) return { error: 'This verification code expired. Request a new code.' };
+        if ((data.attempts || 0) >= 5) return { error: 'Too many incorrect codes. Request a new code.' };
+        if (data.codeHash !== otpDigest(ref, code)) {
+          tx.update(ref, { attempts: (data.attempts || 0) + 1 });
+          return { error: 'That verification code is incorrect.' };
+        }
+        tx.update(ref, { verified: true, verifiedAt: time(), verificationTokenHash: hash(token) });
+        return { success: true };
+      });
+      if (!outcome.success) fail(400, outcome.error);
+      let emailAccountExists = false, passwordLoginAvailable = true, googleSignInOnly = false;
+      try {
+        const account = await auth.getUserByEmail(address);
+        emailAccountExists = true;
+        const providerIds = (account.providerData || []).map(p => p.providerId);
+        passwordLoginAvailable = providerIds.includes('password');
+        googleSignInOnly = providerIds.length === 1 && providerIds[0] === 'google.com';
+      } catch (error) {
+        if (error.code !== 'auth/user-not-found') {
+          emailAccountExists = null;
+          passwordLoginAvailable = null;
+        }
+      }
+      return { verified: true, verificationToken: token, emailAccountExists, passwordLoginAvailable, googleSignInOnly };
+    },
     async register(identity, body) {
       const who = await session(identity);
       fields(body, [
@@ -254,24 +351,44 @@ function createSustainabilityAccounts({
         'lastName',
         'title',
         'organisationName',
-        'accountType',
+        'accountType', 'accountTypes',
+        'lineOfBusiness', 'serviceType', 'serviceTypes', 'emailVerificationToken',
       ]);
+      if (body.accountTypes != null && !Array.isArray(body.accountTypes)) fail(400, 'Select account types from the list.');
+      if (body.serviceTypes != null && !Array.isArray(body.serviceTypes)) fail(400, 'Select service categories from the list.');
       const profile = details(body),
-        name = text(body.organisationName, 'Organisation name', 150);
-      if (!OWNER_ROLES.includes(body.accountType))
-        fail(
-          400,
-          'Choose sustainability action owner or sustainability service provider.'
-        );
+        name = text(body.organisationName, 'Organisation name', 150),
+        requestedTypes = Array.isArray(body.accountTypes) ? body.accountTypes : [body.accountType ?? ACTION_OWNER],
+        accountTypes = [...new Set(requestedTypes)],
+        accountType = accountTypes.includes(ACTION_OWNER) ? ACTION_OWNER : accountTypes[0],
+        requestedServices = Array.isArray(body.serviceTypes) ? body.serviceTypes : body.serviceType == null ? [] : [body.serviceType],
+        serviceTypes = [...new Set(requestedServices)],
+        serviceType = serviceTypes[0] || null,
+        lineOfBusiness = accountTypes.includes(ACTION_OWNER) ? text(body.lineOfBusiness, 'Line of business', 150) : null;
+      if (!accountTypes.length || accountTypes.some((type) => !OWNER_ROLES.includes(type)))
+        fail(400, 'Select sustainability action owner, service provider or both.');
+      if (accountTypes.includes(SERVICE_PROVIDER) && (!serviceTypes.length || serviceTypes.some((type) => !PROVIDER_SERVICES.includes(type))))
+        fail(400, 'Choose at least one supported service: NGO, ESG or Environmental services.');
+      if (!accountTypes.includes(SERVICE_PROVIDER) && serviceTypes.length)
+        fail(400, 'Service categories are only available to service providers.');
+      const nameSlug = name
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
       const slug =
-        name
-          .normalize('NFKD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '')
-          .slice(0, 60) || 'organisation';
-      const orgId = `${slug}-${randomId()}`,
+        nameSlug.split('-').reduce((result, word) => {
+          if (!word) return result;
+          if (!result) return word.slice(0, 24);
+          return result.length + word.length + 1 <= 24
+            ? `${result}-${word}`
+            : result;
+        }, '') || 'organisation';
+      const suffix =
+        randomId().toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 6) ||
+        crypto.randomBytes(3).toString('hex');
+      const orgId = `${slug}-${suffix}`,
         orgRef = orgs.doc(identifier(orgId));
       return db.runTransaction(async (tx) => {
         const current = await tx.get(users.doc(who.uid));
@@ -281,7 +398,9 @@ function createSustainabilityAccounts({
             !membershipV2(old) ||
             old.createdBy !== who.uid ||
             old.registration?.organisationName !== name ||
-            old.registration?.accountType !== body.accountType ||
+            old.registration?.lineOfBusiness !== lineOfBusiness ||
+            JSON.stringify([...(old.registration?.accountTypes || [old.registration?.accountType]).filter(Boolean)].sort()) !== JSON.stringify([...accountTypes].sort()) ||
+            JSON.stringify([...(old.registration?.serviceTypes || (old.registration?.serviceType ? [old.registration.serviceType] : []))].sort()) !== JSON.stringify([...serviceTypes].sort()) ||
             ['firstName', 'lastName', 'title'].some(
               (k) => old.registration[k] !== profile[k]
             )
@@ -301,11 +420,16 @@ function createSustainabilityAccounts({
         const taken = await tx.get(orgRef);
         if (taken.exists)
           fail(409, 'Organisation ID collision. Retry registration.');
+        await consumeEmailVerification(tx, who.email, body.emailVerificationToken);
         const stamp = time(),
-          role = body.accountType;
+          role = accountType;
         const org = {
           name,
           accountType: role,
+          accountTypes,
+          lineOfBusiness,
+          serviceType,
+          serviceTypes,
           membershipVersion: 2,
           ownerUids: [who.uid],
           revision: 1,
@@ -319,8 +443,12 @@ function createSustainabilityAccounts({
           ...who,
           orgId,
           accountType: role,
+          accountTypes,
+          lineOfBusiness,
+          serviceType,
+          serviceTypes,
           role,
-          roles: [role],
+          roles: accountTypes,
           scope: { type: 'org' },
           status: 'active',
           membershipVersion: 2,
@@ -332,6 +460,10 @@ function createSustainabilityAccounts({
             ...profile,
             organisationName: name,
             accountType: role,
+            accountTypes,
+            lineOfBusiness,
+            serviceType,
+            serviceTypes,
           },
         };
         tx.create(orgRef, org);
@@ -359,10 +491,8 @@ function createSustainabilityAccounts({
         return {
           user: member(who.uid, c.user),
           organisation: organisation(c.orgId, c.org.data()),
-          canManageMembers:
-            c.user.role === ACTION_OWNER &&
-            c.org.data().accountType === ACTION_OWNER &&
-            c.org.data().ownerUids.includes(who.uid),
+          canManageMembers: OWNER_ROLES.includes(c.org.data().accountType) &&
+            c.user.role === c.org.data().accountType && c.org.data().ownerUids.includes(who.uid),
         };
       });
     },
@@ -388,7 +518,7 @@ function createSustainabilityAccounts({
         }
         update.photoURL = body.photoURL;
       }
-      return db.runTransaction(async (tx) => {
+      const saved = await db.runTransaction(async (tx) => {
         const c = await access(tx, who);
         const next = {
           ...update,
@@ -396,20 +526,29 @@ function createSustainabilityAccounts({
           updatedAt: time(),
         };
         tx.set(c.doc.ref, next, { merge: true });
-        tx.set(legacy(who.uid), next, { merge: true });
+        if (c.doc.ref.parent.id !== 'partnerV2Users')
+          tx.set(legacy(who.uid), next, { merge: true });
         return { user: member(who.uid, { ...c.user, ...next }) };
       });
+      if (typeof update.photoURL === 'string') {
+        await auth.updateUser(who.uid, { photoURL: update.photoURL }).catch(() => {});
+      }
+      return saved;
     },
     async listMembers(identity) {
       const who = await session(identity);
       const c = await db.runTransaction((tx) => access(tx, who, true));
-      const docs = await users.where('orgId', '==', c.orgId).limit(500).get();
+      const [docs, scopedDocs] = await Promise.all([
+        users.where('orgId', '==', c.orgId).limit(500).get(),
+        v2Users.where('orgId', '==', c.orgId).limit(500).get(),
+      ]);
+      const byUid = new Map([...docs.docs, ...scopedDocs.docs]
+        .filter((d) => membershipV2(d.data()))
+        .map((d) => [d.id, d]));
       return {
         orgId: c.orgId,
-        members: docs.docs
-          .filter((d) => membershipV2(d.data()))
-          .map((d) => member(d.id, d.data())),
-        grantableRoles: INVITED_ROLES,
+        members: [...byUid.values()].map((d) => member(d.id, d.data())),
+        grantableRoles: c.org.data().accountType === ACTION_OWNER ? OWNER_INVITABLE_ROLES : INVITED_ROLES,
       };
     },
     async updateMember(identity, uid, body) {
@@ -429,7 +568,7 @@ function createSustainabilityAccounts({
         fail(400, 'Choose a role or status to change.');
       return db.runTransaction(async (tx) => {
         const c = await access(tx, who, true),
-          target = await tx.get(users.doc(uid));
+          target = await membershipDoc(tx, uid);
         if (!target.exists) fail(404, 'Member not found.');
         const old = target.data();
         if (!membershipV2(old) || old.orgId !== c.orgId)
@@ -438,9 +577,15 @@ function createSustainabilityAccounts({
           fail(409, 'This member changed. Refresh before updating.');
         const role = body.role || old.role,
           status = body.status || old.status;
+        if (
+          old.role === c.org.data().accountType &&
+          old.status !== 'active' &&
+          status === 'active'
+        )
+          fail(409, 'Owner access can only be restored through a new owner invitation.');
         let owners;
         if (
-          old.role === ACTION_OWNER &&
+          old.role === c.org.data().accountType &&
           (role !== old.role || status !== old.status)
         ) {
           const remaining = (c.org.data().ownerUids || []).filter(
@@ -455,15 +600,15 @@ function createSustainabilityAccounts({
                 d.exists &&
                 membershipV2(d.data()) &&
                 d.data().orgId === c.orgId &&
-                d.data().role === ACTION_OWNER &&
+                d.data().role === c.org.data().accountType &&
                 d.data().status === 'active'
             )
             .map((d) => d.id);
-          if (role === ACTION_OWNER && status === 'active') owners.push(uid);
+          if (role === c.org.data().accountType && status === 'active') owners.push(uid);
           if (!owners.length)
             fail(
               409,
-              'The organisation must retain at least one active sustainability action owner.'
+              'The organisation must retain at least one active owner.'
             );
         }
         const next = {
@@ -475,7 +620,8 @@ function createSustainabilityAccounts({
           updatedBy: who.uid,
         };
         tx.set(target.ref, next, { merge: true });
-        tx.set(legacy(uid), next, { merge: true });
+        if (target.ref.parent.id !== 'partnerV2Users')
+          tx.set(legacy(uid), next, { merge: true });
         if (owners)
           tx.update(c.org.ref, {
             ownerUids: owners,
@@ -493,14 +639,16 @@ function createSustainabilityAccounts({
       const who = await session(identity);
       fields(body, ['email', 'role']);
       const to = email(body.email);
-      if (!INVITED_ROLES.includes(body.role))
-        fail(400, 'Invitations can grant only admin or analyst access.');
+      if (![...INVITED_ROLES, ACTION_OWNER].includes(body.role))
+        fail(400, 'Invitations can grant admin or analyst access, with owner transfer available to action-owner organisations.');
       if (to === who.email) fail(403, 'You cannot invite yourself.');
       const token = crypto.randomBytes(32).toString('base64url'),
         ref = invites.doc();
       let link;
       const data = await db.runTransaction(async (tx) => {
         const c = await access(tx, who, true);
+        if (body.role === ACTION_OWNER && c.org.data().accountType !== ACTION_OWNER)
+          fail(403, 'Service-provider organisations cannot transfer their owner role through invitations.');
         link = url(token);
         const key = keys.doc(hash(`${c.orgId}:${to}`)),
           prior = await tx.get(key);
@@ -553,7 +701,69 @@ function createSustainabilityAccounts({
       const who = await session(identity),
         c = await db.runTransaction((tx) => access(tx, who, true));
       const docs = await invites.where('orgId', '==', c.orgId).limit(500).get();
-      return { invitations: docs.docs.map(invitation) };
+      return { orgId: c.orgId, invitations: docs.docs.map(invitation) };
+    },
+    async searchProviders(identity, query) {
+      const who = await session(identity), c = await db.runTransaction((tx) => access(tx, who, true));
+      if (!hasAccountType(c.org.data(), ACTION_OWNER)) fail(403, 'Only action-owner organisations can add service-provider collaborators.');
+      if (typeof query !== 'string') fail(400, 'Enter a search term.');
+      const term = query.trim().toLocaleLowerCase();
+      if (term.length < 2) fail(400, 'Enter at least two characters to search.');
+      const snapshot = await orgs.limit(500).get();
+      const results = [];
+      for (const doc of snapshot.docs) {
+        const org = doc.data();
+        if (org.status !== 'active' || !hasAccountType(org, SERVICE_PROVIDER) || doc.id === c.orgId || ![org.name, ...(org.serviceTypes || [org.serviceType])].some(v => String(v || '').toLocaleLowerCase().includes(term))) continue;
+        const owners = await Promise.all((org.ownerUids || []).map(uid => users.doc(uid).get()));
+        const owner = owners.find(d => d.exists && d.data().status === 'active' && (d.data().roles || [d.data().role]).includes(SERVICE_PROVIDER));
+        if (owner) results.push({ orgId: doc.id, orgName: org.name, serviceType: org.serviceType || null, serviceTypes: org.serviceTypes || (org.serviceType ? [org.serviceType] : []), ownerName: owner.data().name || `${owner.data().firstName || ''} ${owner.data().lastName || ''}`.trim() });
+      }
+      return { providers: results.slice(0, 50) };
+    },
+    async listCollaborators(identity) {
+      const who = await session(identity), c = await db.runTransaction((tx) => access(tx, who));
+      if (hasAccountType(c.org.data(), ACTION_OWNER)) {
+        const docs = await collaborators.where('actionOwnerOrgId', '==', c.orgId).limit(500).get();
+        return { collaborators: docs.docs.filter(d => d.data().status === 'active').map(d => ({ providerOrgId: d.data().providerOrgId, orgName: d.data().providerOrgName, serviceType: d.data().serviceType || null, access: d.data().access, status: d.data().status })) };
+      }
+      if (hasAccountType(c.org.data(), SERVICE_PROVIDER)) {
+        const docs = await collaborators.where('providerOrgId', '==', c.orgId).limit(500).get();
+        return { collaborators: docs.docs.filter(d => d.data().status === 'active').map(d => ({ orgId: d.data().actionOwnerOrgId, orgName: d.data().actionOwnerOrgName, access: d.data().access, status: d.data().status })) };
+      }
+      return { collaborators: [] };
+    },
+    async addCollaborator(identity, body) {
+      const who = await session(identity); fields(body, ['providerOrgId', 'access']);
+      const providerOrgId = identifier(body.providerOrgId);
+      if (!['read', 'write'].includes(body.access)) fail(400, 'Choose read or write access.');
+      return db.runTransaction(async tx => {
+        const c = await access(tx, who, true);
+        if (!hasAccountType(c.org.data(), ACTION_OWNER)) fail(403, 'Only action-owner organisations can add service-provider collaborators.');
+        const provider = await tx.get(orgs.doc(providerOrgId));
+        if (!provider.exists || provider.data().status !== 'active' || !hasAccountType(provider.data(), SERVICE_PROVIDER)) fail(404, 'Active service-provider organisation not found.');
+        const ownerDocs = await Promise.all((provider.data().ownerUids || []).map(uid => tx.get(users.doc(uid))));
+        const owner = ownerDocs.find(d => d.exists && d.data().status === 'active' && (d.data().roles || [d.data().role]).includes(SERVICE_PROVIDER) && d.data().orgId === providerOrgId);
+        if (!owner) fail(409, 'The service-provider organisation has no active owner.');
+        const ref = collaborators.doc(hash(`${c.orgId}:${providerOrgId}`));
+        const previous = await tx.get(ref), stamp = time();
+        const data = { actionOwnerOrgId: c.orgId, actionOwnerOrgName: c.org.data().name, providerOrgId, providerOrgName: provider.data().name, serviceType: provider.data().serviceType || null, serviceTypes: provider.data().serviceTypes || (provider.data().serviceType ? [provider.data().serviceType] : []), providerOwnerUid: owner.id, access: body.access, status: 'active', addedBy: who.uid, createdAt: previous.exists ? previous.data().createdAt : stamp, updatedAt: stamp };
+        tx.set(ref, data);
+        audit(tx, who.uid, 'sustainability.collaborator.added', c.orgId, providerOrgId, { access: body.access });
+        return { collaborator: { providerOrgId, orgName: data.providerOrgName, serviceType: data.serviceType, serviceTypes: data.serviceTypes, access: data.access, status: data.status } };
+      });
+    },
+    async updateCollaborator(identity, providerOrgId, body) {
+      const who = await session(identity); identifier(providerOrgId); fields(body, ['access', 'status']);
+      if ((body.access != null && !['read', 'write'].includes(body.access)) || (body.status != null && !['active', 'inactive'].includes(body.status))) fail(400, 'Choose read/write access or active/inactive status.');
+      return db.runTransaction(async tx => {
+        const c = await access(tx, who, true);
+        if (!hasAccountType(c.org.data(), ACTION_OWNER)) fail(403, 'Only action-owner organisations can manage collaborators.');
+        const ref = collaborators.doc(hash(`${c.orgId}:${providerOrgId}`)), doc = await tx.get(ref);
+        if (!doc.exists) fail(404, 'Collaborator not found.');
+        const next = { ...(body.access ? { access: body.access } : {}), ...(body.status ? { status: body.status } : {}), updatedAt: time() };
+        tx.update(ref, next); audit(tx, who.uid, `sustainability.collaborator.${body.status === 'inactive' ? 'removed' : 'updated'}`, c.orgId, providerOrgId, next);
+        return { success: true };
+      });
     },
     async changeInvitation(identity, id, revoke) {
       const who = await session(identity),
@@ -605,7 +815,7 @@ function createSustainabilityAccounts({
     },
     async validateInvitation(token) {
       const ref = await findLink(token);
-      return db.runTransaction(async (tx) => {
+      const result = await db.runTransaction(async (tx) => {
         const { data, org } = await linkIn(tx, ref, token);
         return {
           email: data.email,
@@ -614,22 +824,52 @@ function createSustainabilityAccounts({
           expiresAt: data.expiresAt,
         };
       });
+      let existingAccount = false, firstName = '', lastName = '';
+      try {
+        const identity = await auth.getUserByEmail(result.email);
+        existingAccount = true;
+        const membership = await users.doc(identity.uid).get();
+        const profile = membership.exists ? membership.data() : {};
+        firstName = profile.firstName || identity.displayName?.trim().split(/\s+/)[0] || '';
+        lastName = profile.lastName || identity.displayName?.trim().split(/\s+/).slice(1).join(' ') || '';
+      } catch (error) {
+        if (error.code !== 'auth/user-not-found') throw error;
+      }
+      return { ...result, existingAccount, ...(existingAccount ? { firstName, lastName } : {}) };
     },
     async acceptInvitation(identity, body) {
       const who = await session(identity);
-      fields(body, ['token', 'firstName', 'lastName', 'title']);
-      const profile = details(body),
-        ref = await findLink(body.token);
-      return db.runTransaction(async (tx) => {
+      fields(body, ['token', 'firstName', 'lastName', 'title', 'emailVerificationToken']);
+      const profile = {
+        firstName: typeof body.firstName === 'string' ? body.firstName.trim() : '',
+        lastName: typeof body.lastName === 'string' ? body.lastName.trim() : '',
+        title: typeof body.title === 'string' ? body.title.trim() : '',
+      };
+      if ([profile.firstName, profile.lastName, profile.title].some((v) => v.length > 150))
+        fail(400, 'Profile details are too long.');
+      const ref = await findLink(body.token);
+      const result = await db.runTransaction(async (tx) => {
         const { data, org } = await linkIn(tx, ref, body.token);
         if (data.email !== who.email)
           fail(403, 'Sign in with the email that received this invitation.');
-        const old = await tx.get(users.doc(who.uid));
-        if (old.exists)
-          fail(
-            409,
-            'This identity already has a membership. Invitations cannot move or re-grant existing accounts.'
-          );
+        const [old, scopedOld] = await Promise.all([
+          tx.get(users.doc(who.uid)),
+          tx.get(v2Users.doc(who.uid)),
+        ]);
+        const membership = scopedOld.exists ? scopedOld : old;
+        const existingMembership = membership.data();
+        const ownerTransferToExistingMember =
+          data.role === ACTION_OWNER &&
+          membership.exists &&
+          membershipV2(existingMembership) &&
+          existingMembership.orgId === org.id &&
+          existingMembership.status === 'active' &&
+          INVITED_ROLES.includes(existingMembership.role) &&
+          existingMembership.email === who.email;
+        if (scopedOld.exists && !ownerTransferToExistingMember)
+          fail(409, 'This identity already has a sustainability membership.');
+        if (old.exists && membershipV2(old.data()) && !ownerTransferToExistingMember)
+          fail(409, 'This identity already has a sustainability membership.');
         const key = keys.doc(data.keyId),
           reservation = await tx.get(key);
         if (
@@ -639,25 +879,80 @@ function createSustainabilityAccounts({
           reservation.data().used
         )
           fail(409, 'This invitation is no longer current.');
+        let previousOwner = null;
+        if (data.role === ACTION_OWNER) {
+          const owners = org.data().ownerUids || [];
+          if (owners.length !== 1 || owners[0] === who.uid)
+            fail(409, 'This organisation cannot complete an owner transfer.');
+          previousOwner = await tx.get(users.doc(identifier(owners[0])));
+          const previous = previousOwner.data();
+          if (
+            !previousOwner.exists ||
+            !membershipV2(previous) ||
+            previous.orgId !== org.id ||
+            previous.role !== ACTION_OWNER ||
+            previous.status !== 'active'
+          )
+            fail(409, 'The current organisation owner is not active.');
+        }
         const stamp = time(),
+          existingProfile = existingMembership || (old.exists ? old.data() : {}),
+          acceptedProfile = {
+            firstName: profile.firstName || existingProfile.firstName || who.email.split('@')[0],
+            lastName: profile.lastName || existingProfile.lastName || '',
+            title: profile.title || existingProfile.title || '',
+          },
           user = {
-            ...profile,
+            ...existingProfile,
+            ...acceptedProfile,
+            name: `${acceptedProfile.firstName} ${acceptedProfile.lastName}`.trim(),
             ...who,
             orgId: org.id,
             accountType: org.data().accountType,
+            lineOfBusiness: org.data().lineOfBusiness || null,
             role: data.role,
             roles: [data.role],
             scope: { type: 'org' },
             status: 'active',
             membershipVersion: 2,
-            revision: 1,
+            revision: membershipV2(existingMembership) ? (existingMembership.revision || 0) + 1 : 1,
             invitedBy: data.createdBy,
             invitationId: ref.id,
-            createdAt: stamp,
+            createdAt: membershipV2(existingMembership) ? existingMembership.createdAt : stamp,
             updatedAt: stamp,
           };
-        tx.create(users.doc(who.uid), user);
-        tx.set(legacy(who.uid), user, { merge: true });
+        await consumeEmailVerification(tx, who.email, body.emailVerificationToken, ref.id);
+        if (scopedOld.exists) tx.set(v2Users.doc(who.uid), user, { merge: true });
+        else if (old.exists && membershipV2(old.data())) tx.set(users.doc(who.uid), user, { merge: true });
+        else if (old.exists) tx.create(v2Users.doc(who.uid), user);
+        else tx.create(users.doc(who.uid), user);
+        if (!old.exists || membershipV2(old.data())) tx.set(legacy(who.uid), user, { merge: true });
+        if (previousOwner) {
+          const former = previousOwner.data(),
+            inactive = {
+              status: 'inactive',
+              revision: former.revision + 1,
+              updatedAt: stamp,
+              updatedBy: who.uid,
+              ownerTransferredTo: who.uid,
+              ownerTransferredAt: stamp,
+            };
+          tx.set(previousOwner.ref, inactive, { merge: true });
+          tx.set(legacy(previousOwner.id), inactive, { merge: true });
+          tx.update(org.ref, {
+            ownerUids: [who.uid],
+            revision: org.data().revision + 1,
+            updatedAt: stamp,
+          });
+          audit(
+            tx,
+            who.uid,
+            'sustainability.owner.transferred',
+            org.id,
+            previousOwner.id,
+            { newOwnerUid: who.uid, invitationId: ref.id }
+          );
+        }
         tx.update(ref, {
           used: true,
           usedBy: who.uid,
@@ -676,8 +971,49 @@ function createSustainabilityAccounts({
         return {
           user: member(who.uid, user),
           organisation: organisation(org.id, org.data()),
+          ...(previousOwner ? { ownerTransfer: { formerOwnerUid: previousOwner.id } } : {}),
         };
       });
+      if (result.ownerTransfer) {
+        let formerOwnerAuthDisabled = false;
+        if (typeof auth.updateUser === 'function') {
+          try {
+            await auth.updateUser(result.ownerTransfer.formerOwnerUid, {
+              disabled: true,
+            });
+            formerOwnerAuthDisabled = true;
+          } catch (_) {
+            formerOwnerAuthDisabled = false;
+          }
+        }
+        if (formerOwnerAuthDisabled) {
+          const disabledAt = time();
+          await Promise.all([
+            users.doc(result.ownerTransfer.formerOwnerUid).set(
+              { authDisabledAt: disabledAt },
+              { merge: true }
+            ),
+            legacy(result.ownerTransfer.formerOwnerUid).set(
+              { authDisabledAt: disabledAt },
+              { merge: true }
+            ),
+          ]).catch(() => {});
+        }
+        return {
+          ...result,
+          ownerTransfer: {
+            complete: true,
+            formerOwnerAuthDisabled,
+            ...(formerOwnerAuthDisabled
+              ? {}
+              : {
+                  warning:
+                    'Ownership transferred, but the previous Firebase sign-in could not be disabled automatically. Contact an administrator.',
+                }),
+          },
+        };
+      }
+      return result;
     },
   };
 }

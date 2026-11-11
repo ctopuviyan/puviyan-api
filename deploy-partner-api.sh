@@ -67,6 +67,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --region "$REGION" \
   --project "$PROJECT_ID" \
   --env-vars-file "$ENV_VARS_FILE" \
+  --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,PLANTNET_API_KEY=PLANTNET_API_KEY:latest" \
   --allow-unauthenticated \
   --max-instances 10 \
   --memory 512Mi \

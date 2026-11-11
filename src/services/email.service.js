@@ -128,6 +128,19 @@ The Puviyan Team
   }
 }
 
+async function sendEmailVerificationCode({ to, code, expiresInMinutes = 10, organisationName = null }) {
+  const safeCode = String(code).replace(/[^0-9]/g, '');
+  if (!/^\d{6}$/.test(safeCode)) throw new Error('A six-digit verification code is required.');
+  const info = await createTransporter().sendMail({
+    from: `"iampuviyan Partner" <${process.env.SMTP_USER || 'cto@puviyan.com'}>`,
+    to,
+    subject: 'Your iampuviyan Partner verification code',
+    text: `Your iampuviyan Partner verification code is ${safeCode}. It expires in ${expiresInMinutes} minutes. If you did not request this code, you can ignore this email.`,
+    html: `<!doctype html><html><body style="margin:0;background:#f3f4f6;font-family:Arial,sans-serif;color:#1f2937"><main style="max-width:520px;margin:32px auto;padding:28px;background:#fff;border-radius:12px"><p style="color:#168443;font-weight:700;letter-spacing:2px">IAMPuVIYAN PARTNER</p><h1 style="font-size:22px">Verify your email</h1><p>${organisationName ? `Use this code to continue joining <strong>${String(organisationName).replace(/[&<>\"']/g, '')}</strong>.` : 'Use this code to continue creating your account.'}</p><p style="font-size:32px;letter-spacing:8px;font-weight:700;text-align:center;padding:18px;background:#f3f4f6;border-radius:8px">${safeCode}</p><p>This code expires in ${expiresInMinutes} minutes. If you did not request it, you can ignore this email.</p></main></body></html>`,
+  });
+  return { success: true, messageId: info.messageId };
+}
+
 /**
  * Send rejection notification email
  */
@@ -431,6 +444,7 @@ All rights reserved © 2025 Puviyan Digital Solutions Private Limited
 
 module.exports = {
   sendSignupLinkEmail,
+  sendEmailVerificationCode,
   sendRejectionEmail,
   sendRewardApprovalEmail,
 };

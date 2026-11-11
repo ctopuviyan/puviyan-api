@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const crypto = require('node:crypto');
-const { fail, contextFor, assertOrg, assertProject, text, validDate, treeMetadata, imageType } = require('../services/partner-project-policy');
+const { fail, contextFor, assertOrg, assertProject, text, validDate, projectBoundary, assertProjectBoundary, treeMetadata, imageType } = require('../services/partner-project-policy');
 
 const { getFirestore, getPartnerAuth } = require('../config/firebase.config');
 const { apiLimiter } = require('../middleware/rateLimit.middleware');
@@ -34,8 +34,9 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       try { decoded = await auth.verifyIdToken(token, true); }
       catch (_) { fail(401, 'Your session has expired. Please sign in again.'); }
       req.identity = { uid: decoded.uid, email: decoded.email || '', signInProvider: decoded.firebase?.sign_in_provider };
-      const membership = await db.collection('partnerUsers').doc(decoded.uid).get();
-      if (membership.data()?.membershipVersion === 2) {
+      const scopedMembership = await db.collection('partnerV2Users').doc(decoded.uid).get();
+      const membership = scopedMembership.exists ? scopedMembership : await db.collection('partnerUsers').doc(decoded.uid).get();
+      if (!scopedMembership.exists && membership.data()?.membershipVersion === 2) {
         await requirePasswordIdentity(auth,req.identity);
         const org = await db.collection('organizations').doc(membership.data().orgId).get();
         if (!org.exists || org.data().status !== 'active') fail(403,'The organisation is inactive.');
@@ -51,8 +52,21 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   router.get('/account/requests', wrap(async (req,res) => res.json(await management.ownRequests(req.identity))));
   router.post('/account/complete-signup', wrap(async (req,res) => res.json(await management.complete(req.identity,req.body.token))));
   router.use(async (req,_res,next) => {
-    try { const user = await db.collection('partnerUsers').doc(req.identity.uid).get();
-      req.context = contextFor(req.identity.uid,user.exists ? user.data() : null); next();
+    try { const scoped = await db.collection('partnerV2Users').doc(req.identity.uid).get();
+      const user = scoped.exists ? scoped : await db.collection('partnerUsers').doc(req.identity.uid).get();
+      let data = user.exists ? user.data() : null;
+      if (scoped.exists) {
+        const portalUser = await db.collection('partnerUsers').doc(req.identity.uid).get();
+        if (portalUser.exists && (portalUser.data().roles || []).includes('puviyan_admin')) {
+          data = { ...data, roles: [...new Set([...(data.roles || []), 'puviyan_admin'])] };
+        }
+      }
+      let collaborationMap = {};
+      if (data?.membershipVersion === 2 && data.orgId && (data.accountType === 'sustainability_service_provider' || (data.roles || []).includes('sustainability_service_provider'))) {
+        const links = await db.collection('partnerV2Collaborators').where('providerOrgId', '==', data.orgId).limit(500).get();
+        collaborationMap = Object.fromEntries(links.docs.filter(d => d.data().status === 'active').map(d => [d.data().actionOwnerOrgId, d.data().access]));
+      }
+      req.context = contextFor(req.identity.uid,data,collaborationMap); next();
     } catch(error) { next(error); }
   });
   router.post('/account/role-requests', wrap(async (req,res) => res.status(201).json(await management.requestRoles(req.context,req.identity,req.body))));
@@ -81,6 +95,8 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   const sortLatest = list => list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   router.get('/me', wrap(async (req, res) => {
     const c = req.context;
+    const collaboratorLinks = c.orgId ? await db.collection('partnerV2Collaborators').where('providerOrgId', '==', c.orgId).limit(500).get() : { docs: [] };
+    const collaborations = collaboratorLinks.docs.filter(d => d.data().status === 'active').map(d => ({ orgId: d.data().actionOwnerOrgId, orgName: d.data().actionOwnerOrgName, access: d.data().access }));
     let orgName = 'All organisations';
     const departments = [];
     if (c.orgId) {
@@ -94,7 +110,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       }
     }
     res.json({ uid: c.uid, membershipVersion: c.membershipVersion, orgId: c.orgId, orgName, roles: c.roles,
-      departmentScoped: c.departmentScoped, departments, canWrite: c.canWrite });
+      departmentScoped: c.departmentScoped, departments, canWrite: c.canWrite, collaborations });
   }));
   router.get('/organisations', wrap(async (req, res) => {
     if (!req.context.superAdmin) fail(403, 'Super admin access is required.');
@@ -103,19 +119,19 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   }));
   router.get('/projects', wrap(async (req, res) => {
     const c = req.context;
-    const orgId = req.query.orgId || c.orgId;
-    if (orgId) assertOrg(c, orgId);
-    if (!orgId && !c.superAdmin) fail(403, 'An organisation is required.');
-    let query = orgId ? projects.where('orgId', '==', orgId) : projects;
-    const snapshot = await query.limit(500).get();
-    const visible = snapshot.docs.map(serialise).filter(p => !c.departmentScoped || c.departmentIds.includes(p.departmentId));
+    const requestedOrgId = req.query.orgId || null;
+    if (requestedOrgId && requestedOrgId !== c.orgId && !c.collaborations?.[requestedOrgId]) assertOrg(c, requestedOrgId);
+    if (!requestedOrgId && !c.orgId && !c.superAdmin) fail(403, 'An organisation is required.');
+    const orgIds = requestedOrgId ? [requestedOrgId] : c.superAdmin ? [] : [c.orgId, ...Object.keys(c.collaborations || {})].filter(Boolean);
+    const snapshots = await Promise.all(orgIds.length ? orgIds.map(id => projects.where('orgId', '==', id).limit(500).get()) : [projects.limit(500).get()]);
+    const visible = snapshots.flatMap(s => s.docs.map(serialise)).filter(p => (!c.departmentScoped || c.departmentIds.includes(p.departmentId)) && (!c.collaborations?.[p.orgId] || Object.hasOwn(c.collaborations, p.orgId)));
     res.json({ projects: sortLatest(visible) });
   }));
   router.post('/projects', wrap(async (req, res) => {
     const c = req.context;
     if (!c.canWrite) fail(403, 'Your approved roles allow viewing only.');
     const orgId = req.body.orgId || c.orgId;
-    assertOrg(c, orgId);
+    if (orgId !== c.orgId && (!c.collaborations?.[orgId] || !c.providerCanWrite || c.collaborations[orgId] !== 'write')) assertOrg(c, orgId);
     const org = await db.collection('organizations').doc(orgId).get();
     if (!org.exists || (org.data().status && org.data().status !== 'active')) fail(400, 'Choose an active organisation.');
     const departmentId = req.body.departmentId || null;
@@ -126,10 +142,29 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       if (!department.exists) fail(400, 'Department not found.');
     }
     if (!['plant_trees', 'prevent_soil_erosion'].includes(req.body.scope)) fail(400, 'Choose a supported project scope.');
+    const projectDate = (value, label) => {
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) fail(400, `${label} must be a valid calendar date.`);
+      const parsed = new Date(`${value}T00:00:00.000Z`);
+      if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) fail(400, `${label} must be a valid calendar date.`);
+      return value;
+    };
+    const startDate = projectDate(req.body.startDate, 'Project start date');
+    const endDate = projectDate(req.body.endDate, 'Project end date');
+    if (endDate < startDate) fail(400, 'Project end date must be on or after its start date.');
+    let treeGoal;
+    if (req.body.treeGoal !== undefined) {
+      if (req.body.scope !== 'plant_trees') fail(400, 'Tree goals are only available for Plant Trees projects.');
+      treeGoal = Number(req.body.treeGoal);
+      if (!Number.isInteger(treeGoal) || treeGoal < 1 || treeGoal > 10000000) fail(400, 'Enter a tree goal between 1 and 10,000,000.');
+    }
+    const boundary = projectBoundary(req.body.boundary);
     const project = {
       name: text(req.body.name, 'Project name', 100), description: text(req.body.description, 'Description', 2000),
       locationName: text(req.body.locationName, 'Location', 200), scope: req.body.scope,
+      startDate, endDate,
+      ...(treeGoal !== undefined ? { treeGoal } : {}),
       orgId, departmentId, createdByUid: c.uid, createdAt: new Date().toISOString(), status: 'active',
+      ...(boundary ? { boundary } : {}),
     };
     const ref = await projects.add(project);
     res.status(201).json({ project: { id: ref.id, ...project } });
@@ -168,6 +203,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     let raw;
     try { raw = JSON.parse(req.body.metadata); } catch (_) { fail(400, 'Invalid tree details.'); }
     const data = treeMetadata(raw);
+    assertProjectBoundary(project, data);
     if (data.eventId) {
       const event = await ref.collection('events').doc(data.eventId).get();
       if (!event.exists) fail(400, 'The selected event does not belong to this project.');

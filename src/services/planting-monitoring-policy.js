@@ -226,7 +226,7 @@ function canReview(c) {
   return (
     c.superAdmin ||
     c.roles.some((r) =>
-      ["sustainability_action_owner", "org_admin", "partner_admin"].includes(r),
+      ["sustainability_action_owner", "sustainability_service_provider", "org_admin", "partner_admin"].includes(r),
     )
   );
 }

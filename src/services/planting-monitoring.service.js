@@ -4,6 +4,7 @@ const {
   fail,
   contextFor,
   assertProject,
+  assertProjectBoundary,
   text,
   validDate,
 } = require("./partner-project-policy");
@@ -231,6 +232,9 @@ function createPlantingMonitoring({
       speciesSuggestions: Array.isArray(result.speciesSuggestions)
         ? result.speciesSuggestions.slice(0, 5)
         : [],
+      familySuggestions: Array.isArray(result.familySuggestions)
+        ? result.familySuggestions.filter((v) => typeof v === "string").slice(0, 5)
+        : [],
       visiblePlant:
         typeof result.visiblePlant === "boolean" ? result.visiblePlant : null,
       likelyStage:
@@ -239,13 +243,17 @@ function createPlantingMonitoring({
         typeof result.imageQuality === "string" ? result.imageQuality : null,
       assessedAt: stamp(),
     };
-    await projects
-      .doc(projectId)
-      .collection("trees")
-      .doc(treeId)
-      .collection("observations")
-      .doc(obsId)
-      .set({ aiAssessment: safe }, { merge: true });
+    const treeRef = projects.doc(projectId).collection("trees").doc(treeId);
+    await Promise.all([
+      treeRef.collection("observations").doc(obsId).set(
+        { aiAssessment: safe },
+        { merge: true },
+      ),
+      treeRef.set(
+        { aiAssessment: safe, updatedAt: safe.assessedAt },
+        { merge: true },
+      ),
+    ]);
     return safe;
   }
   return {
@@ -294,6 +302,7 @@ function createPlantingMonitoring({
       );
       const initial = await projectRef.get();
       assertProject(context, initial.exists ? initial.data() : null, true);
+      assertProjectBoundary(initial.data(), data);
       if (initial.data().scope !== "plant_trees")
         fail(400, "Choose a Plant Trees project.");
       const cell = spatialCells(data),
@@ -308,6 +317,7 @@ function createPlantingMonitoring({
           db.runTransaction(async (tx) => {
             const { project } = await actor(tx, context, projectRef, true),
               existing = await tx.get(ref);
+            assertProjectBoundary(project, data);
             if (existing.exists) {
               if (
                 existing.data().createdByUid !== context.uid ||
@@ -392,11 +402,13 @@ function createPlantingMonitoring({
               projectId,
               createdByUid: context.uid,
               createdAt,
+              updatedAt: createdAt,
               storagePath: paths[0],
               contextStoragePath: paths[1] || null,
               fingerprint,
               perceptualHash: photos[0].perceptualHash,
               verificationStatus: "submitted",
+              latestReviewStatus: "pending",
               evidenceState:
                 data.kind === "seed_spot"
                   ? "awaiting_germination"
@@ -510,8 +522,8 @@ function createPlantingMonitoring({
           Date.parse(
             tree.data().nextCheckDueAt || dueAt(tree.data().capturedAt, 30),
           ) < now().getTime(),
-        canObserve: context.canWrite,
-        canReview: canReview(context),
+        canObserve: context.canWrite && (!context.collaborations?.[p.data().orgId] || (context.providerCanWrite && context.collaborations[p.data().orgId] === 'write')),
+        canReview: canReview(context) && (!context.collaborations?.[p.data().orgId] || (context.providerCanWrite && context.collaborations[p.data().orgId] === 'write')),
         aiConfigured:
           (process.env.PLANTING_AI_ENABLED === "true" &&
             !!process.env.GEMINI_API_KEY) ||
@@ -537,6 +549,7 @@ function createPlantingMonitoring({
       );
       const p = await projectRef.get();
       assertProject(context, p.exists ? p.data() : null, true);
+      assertProjectBoundary(p.data(), data);
       const result = await storePhotos(
         p.data(),
         projectId,
@@ -545,7 +558,8 @@ function createPlantingMonitoring({
         photos,
         async (paths) =>
           db.runTransaction(async (tx) => {
-            await actor(tx, context, projectRef, true);
+            const { project } = await actor(tx, context, projectRef, true);
+            assertProjectBoundary(project, data);
             const [current, existing] = await Promise.all([
               tx.get(ref),
               tx.get(obsRef),
@@ -612,6 +626,8 @@ function createPlantingMonitoring({
             });
             tx.update(ref, {
               latestObservationAt: data.capturedAt,
+              updatedAt: createdAt,
+              latestReviewStatus: "pending",
               observationCount: (tree.observationCount || 1) + 1,
               revision: (tree.revision || 1) + 1,
             });
@@ -682,6 +698,10 @@ function createPlantingMonitoring({
           reviewedBy: context.uid,
           reviewedAt,
           revision: old.revision + 1,
+        });
+        tx.update(ref, {
+          updatedAt: reviewedAt,
+          latestReviewStatus: body.decision,
         });
         const last = tree.data().lastApprovedObservationAt;
         if (
