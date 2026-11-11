@@ -268,6 +268,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     const result=await monitoring.remote(req.context,req.params.id,parsePlanting(req),req.file.buffer);res.status(result.created?201:200).json(result);
   }));
   router.get('/projects/:id/plantings/:plantingId', wrap(async (req,res) => res.json(await monitoring.detail(req.context,req.params.id,req.params.plantingId))));
+  router.patch('/projects/:id/plantings/:plantingId/species', wrap(async (req,res) => res.json(await monitoring.confirmSpecies(req.context,req.params.id,req.params.plantingId,req.body))));
   router.post('/projects/:id/plantings/:plantingId/observations', plantingUpload.fields([{name:'photo',maxCount:1},{name:'contextPhoto',maxCount:1}]), wrap(async (req,res) => {
     const photos=req.files||{}; if(!photos.photo?.[0]) fail(400,'A growth photo is required.');
     const result=await monitoring.observe(req.context,req.params.id,req.params.plantingId,parsePlanting(req),photos.photo[0].buffer,photos.contextPhoto?.[0]?.buffer);

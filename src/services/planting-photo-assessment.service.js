@@ -6,6 +6,11 @@ function createPlantingPhotoAssessor({
   env = process.env,
   now = () => new Date(),
 }) {
+  const safeProviderMessage = (value) =>
+    String(value || "")
+      .replace(/AIza[0-9A-Za-z_-]{20,}/g, "[redacted]")
+      .replace(/([?&]key=)[^&\s]+/gi, "$1[redacted]")
+      .slice(0, 300);
   const geminiEnabled =
     env.PLANTING_AI_ENABLED === "true" && !!env.GEMINI_API_KEY;
   const geminiKey = env.GEMINI_API_KEY;
@@ -50,8 +55,14 @@ function createPlantingPhotoAssessor({
       });
       if (response.status === 404)
         return { noSpeciesMatch: true, candidates: [], familySuggestions: [] };
-      if (!response.ok)
-        return { unavailable: true, httpStatus: response.status };
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        return {
+          unavailable: true,
+          httpStatus: response.status,
+          providerMessage: safeProviderMessage(error?.error?.message),
+        };
+      }
       const payload = await response.json();
       const candidates = (payload.results || [])
         .slice(0, 3)
@@ -146,13 +157,16 @@ function createPlantingPhotoAssessor({
           signal: AbortSignal.timeout(15000),
         },
       );
-      if (!response.ok)
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
         return {
           unavailable: true,
           provider: "google",
           model,
           httpStatus: response.status,
+          providerMessage: safeProviderMessage(error?.error?.message),
         };
+      }
       const payload = await response.json();
       const raw = payload.candidates?.[0]?.content?.parts
         ?.map((p) => p.text || "")
@@ -268,12 +282,17 @@ function createPlantingPhotoAssessor({
         ...(plantnet?.noSpeciesMatch ? ["plantnet_no_species_match"] : []),
       ]),
     ];
+    const providerDiagnostics = [
+      visual?.providerMessage ? `Gemini: ${visual.providerMessage}` : null,
+      plantnet?.providerMessage ? `Pl@ntNet: ${plantnet.providerMessage}` : null,
+    ].filter(Boolean);
     if (!visual && !plantnet?.candidates?.length)
       return {
         status: "unavailable",
         provider: "google+plantnet",
         reason: "Image services could not return an assessment.",
         flags,
+        providerDiagnostics,
       };
     return {
       status: "completed",
@@ -287,6 +306,7 @@ function createPlantingPhotoAssessor({
       flags,
       speciesSuggestions,
       familySuggestions: plantnet?.familySuggestions || [],
+      providerDiagnostics,
       visiblePlant: visual?.visiblePlant ?? null,
       likelyStage: visual?.likelyStage || null,
       imageQuality: visual?.imageQuality || null,

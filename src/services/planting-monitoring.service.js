@@ -240,6 +240,12 @@ function createPlantingMonitoring({
       familySuggestions: Array.isArray(result.familySuggestions)
         ? result.familySuggestions.filter((v) => typeof v === "string").slice(0, 5)
         : [],
+      providerDiagnostics: Array.isArray(result.providerDiagnostics)
+        ? result.providerDiagnostics
+            .filter((v) => typeof v === "string")
+            .slice(0, 3)
+            .map((v) => v.slice(0, 300))
+        : [],
       visiblePlant:
         typeof result.visiblePlant === "boolean" ? result.visiblePlant : null,
       likelyStage:
@@ -815,6 +821,34 @@ function createPlantingMonitoring({
           intervalDays: body.intervalDays,
         });
         return { success: true };
+      });
+    },
+    async confirmSpecies(context, projectId, treeId, body = {}) {
+      const suggestion = text(body.speciesSuggestion, "Species suggestion", 150);
+      const projectRef = projects.doc(id(projectId));
+      const ref = projectRef.collection("trees").doc(id(treeId));
+      return db.runTransaction(async (tx) => {
+        await actor(tx, context, projectRef, true);
+        const doc = await tx.get(ref);
+        if (!doc.exists) fail(404, "Planting not found.");
+        const tree = doc.data();
+        if (tree.createdByUid !== context.uid && !canReview(context))
+          fail(403, "Only the recorder or an organisation reviewer can confirm species.");
+        const suggestions = tree.aiAssessment?.speciesSuggestions || [];
+        if (!suggestions.includes(suggestion))
+          fail(400, "Choose a species suggestion from the latest photo assessment.");
+        const species = suggestion.replace(/\s+\(\d+%\)$/, "");
+        tx.update(ref, {
+          species,
+          speciesConfirmedAt: stamp(),
+          speciesConfirmedByUid: context.uid,
+          revision: (tree.revision || 1) + 1,
+        });
+        audit(tx, context, projectId, treeId, "planting.species.confirmed", {
+          species,
+          source: "ai_suggestion",
+        });
+        return { success: true, species };
       });
     },
     async nearby(context, projectId, query) {

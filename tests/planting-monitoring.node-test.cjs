@@ -37,11 +37,10 @@ function metadata(recordId, captureSessionId, offset = 0) {
     recordId,
     captureSessionId,
     kind: "sapling",
-    species: "Neem",
     intervalDays: 30,
     latitude: 13.0827,
     longitude: 80.2707,
-    accuracyMeters: 3,
+    accuracyMeters: 20,
     capturedAt: time,
     locationCapturedAt: time,
     photoSource: "camera",
@@ -56,6 +55,48 @@ test("plant spacing uses metre distances and neighbouring global cells", () => {
   assert.equal(distance(point, point), 0);
   assert.ok(spatialCells(point).keys.length === 27);
   assert.ok(distance(point, { latitude: 13.0827, longitude: 80.2708 }) > 5);
+});
+
+test("species is optional at planting submission and can be confirmed from AI suggestions", async () => {
+  const { db, c } = store();
+  db.data.set("partnerProjects/planting1", {
+    orgId: "orgA",
+    scope: "plant_trees",
+    status: "active",
+  });
+  const { getBucket } = memoryBucket();
+  const service = createPlantingMonitoring({
+    db,
+    getBucket,
+    assess: async () => ({
+      status: "completed",
+      provider: "plantnet",
+      visiblePlant: true,
+      speciesSuggestions: ["Azadirachta indica (94%)"],
+      familySuggestions: ["Meliaceae"],
+    }),
+  });
+  const owner = c("admin");
+  const session = await service.beginCapture(owner, "planting1");
+  const recordId = "f".repeat(32);
+  const created = await service.baseline(
+    owner,
+    "planting1",
+    metadata(recordId, session.id),
+    await image({ r: 40, g: 130, b: 40 }),
+  );
+  assert.equal(created.created, true);
+  let detail = await service.detail(owner, "planting1", recordId);
+  assert.equal(detail.planting.species, null);
+  assert.equal(detail.planting.accuracyMeters, 20);
+
+  const confirmed = await service.confirmSpecies(owner, "planting1", recordId, {
+    speciesSuggestion: "Azadirachta indica (94%)",
+  });
+  assert.equal(confirmed.species, "Azadirachta indica");
+  detail = await service.detail(owner, "planting1", recordId);
+  assert.equal(detail.planting.species, "Azadirachta indica");
+  assert.equal(detail.planting.speciesConfirmedByUid, "admin");
 });
 
 test("planting baseline, five-metre conflict, follow-up history and second-person review", async () => {

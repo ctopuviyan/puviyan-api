@@ -77,7 +77,7 @@ function captureMetadata(
       input.accuracyMeters,
       "GPS accuracy",
       0,
-      legacy ? 100 : 10,
+      legacy ? 100 : 20,
     ),
     capturedAt: validDate(input.capturedAt, "Capture time"),
     locationCapturedAt: validDate(input.locationCapturedAt, "GPS time"),
@@ -142,7 +142,10 @@ function captureMetadata(
     data.kind = input.kind || "tree";
     if (!KINDS.includes(data.kind))
       fail(400, "Choose seed planting spot, sapling or tree.");
-    data.species = text(input.species, "Species (or Unknown)", 100);
+    data.species =
+      input.species == null || input.species === ""
+        ? null
+        : text(input.species, "Species", 100);
     data.intervalDays =
       input.intervalDays ?? (data.kind === "seed_spot" ? 7 : 30);
     number(data.intervalDays, "monitoring interval", 1, 365);
