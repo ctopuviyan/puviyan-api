@@ -136,3 +136,51 @@ test("planting baseline, five-metre conflict, follow-up history and second-perso
   const reviewed = await service.detail(reviewer, "planting1", "a".repeat(32));
   assert.equal(reviewed.planting.verificationStatus, "verified");
 });
+
+test("an explicit AI non-plant result blocks the planting record before photo storage", async () => {
+  const { db, c } = store();
+  db.data.set("partnerProjects/planting1", {
+    orgId: "orgA",
+    scope: "plant_trees",
+    status: "active",
+  });
+  const { files, getBucket } = memoryBucket();
+  const service = createPlantingMonitoring({
+    db,
+    getBucket,
+    assess: async () => ({
+      status: "completed",
+      provider: "google+plantnet",
+      visiblePlant: false,
+      flags: ["plant_not_clearly_visible"],
+    }),
+  });
+  const owner = c("admin");
+  const session = await service.beginCapture(owner, "planting1");
+
+  await assert.rejects(
+    service.baseline(
+      owner,
+      "planting1",
+      metadata("d".repeat(32), session.id),
+      await image({ r: 120, g: 70, b: 35 }),
+    ),
+    (error) => error.status === 422 && /does not clearly show a plant/.test(error.message),
+  );
+
+  assert.equal(files.size, 0);
+  assert.equal(db.data.has(`partnerProjects/planting1/trees/${"d".repeat(32)}`), false);
+
+  const seedSession = await service.beginCapture(owner, "planting1");
+  const seedMetadata = metadata("e".repeat(32), seedSession.id);
+  seedMetadata.kind = "seed_spot";
+  seedMetadata.stage = "sown";
+  seedMetadata.seedCount = 1;
+  const seed = await service.baseline(
+    owner,
+    "planting1",
+    seedMetadata,
+    await image({ r: 80, g: 100, b: 30 }),
+  );
+  assert.equal(seed.created, true);
+});

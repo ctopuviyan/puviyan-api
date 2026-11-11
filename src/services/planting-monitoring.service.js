@@ -174,8 +174,7 @@ function createPlantingMonitoring({
         createdAt: stamp(),
       });
   }
-  async function saveAssessment(
-    context,
+  async function requestAssessment(
     projectId,
     treeId,
     obsId,
@@ -199,9 +198,8 @@ function createPlantingMonitoring({
         baseline.previousImageUnavailable = true;
       }
     }
-    let result;
     try {
-      result = await assess({
+      return await assess({
         photos: assessmentPhotos,
         baseline,
         projectId,
@@ -209,11 +207,18 @@ function createPlantingMonitoring({
         observationId: obsId,
       });
     } catch (_) {
-      result = {
+      return {
         status: "unavailable",
         reason: "AI assessment failed; manual review is required.",
       };
     }
+  }
+  async function saveAssessment(
+    projectId,
+    treeId,
+    obsId,
+    result,
+  ) {
     // AI is advisory: it can never write approval, growth measurements or planting coordinates.
     const allowed = ["not_configured", "unavailable", "completed"];
     if (!result || !allowed.includes(result.status))
@@ -303,6 +308,28 @@ function createPlantingMonitoring({
       assertProjectBoundary(initial.data(), data);
       if (initial.data().scope !== "plant_trees")
         fail(400, "Choose a Plant Trees project.");
+      const assessmentBaseline = {
+        kind: data.kind,
+        stage: data.stage,
+        species: data.species,
+      };
+      const assessment = await requestAssessment(
+        projectId,
+        ref.id,
+        "baseline",
+        photos,
+        assessmentBaseline,
+      );
+      if (
+        assessmentBaseline.stage !== "sown" &&
+        assessmentBaseline.stage !== "not_germinated" &&
+        assessment?.status === "completed" &&
+        assessment.visiblePlant === false
+      )
+        fail(
+          422,
+          "The photo does not clearly show a plant. Take one clear photo of the seedling or tree and try again.",
+        );
       const cell = spatialCells(data),
         pointId = locationId(projectId, ref.id);
       const result = await storePhotos(
@@ -459,12 +486,10 @@ function createPlantingMonitoring({
       );
       if (result.created)
         result.aiAssessment = await saveAssessment(
-          context,
           projectId,
           ref.id,
           "baseline",
-          photos,
-          { kind: data.kind, stage: data.stage, species: data.species },
+          assessment,
         );
       return result;
     },
@@ -546,6 +571,30 @@ function createPlantingMonitoring({
       const p = await projectRef.get();
       assertProject(context, p.exists ? p.data() : null, true);
       assertProjectBoundary(p.data(), data);
+      const assessmentBaseline = {
+        kind: initial.data().kind || "tree",
+        stage: data.stage,
+        species: initial.data().species,
+        previousStoragePath: initial.data().storagePath,
+      };
+      const assessment = await requestAssessment(
+        projectId,
+        ref.id,
+        obsRef.id,
+        photos,
+        assessmentBaseline,
+      );
+      if (
+        !["sown", "not_germinated", "dead", "missing"].includes(
+          assessmentBaseline.stage,
+        ) &&
+        assessment?.status === "completed" &&
+        assessment.visiblePlant === false
+      )
+        fail(
+          422,
+          "The photo does not clearly show a plant. Take one clear photo of the seedling or tree and try again.",
+        );
       const result = await storePhotos(
         p.data(),
         projectId,
@@ -643,17 +692,10 @@ function createPlantingMonitoring({
       );
       if (result.created)
         result.aiAssessment = await saveAssessment(
-          context,
           projectId,
           ref.id,
           obsRef.id,
-          photos,
-          {
-            kind: initial.data().kind || "tree",
-            stage: initial.data().stage || "tree",
-            species: initial.data().species,
-            previousStoragePath: initial.data().storagePath,
-          },
+          assessment,
         );
       return result;
     },

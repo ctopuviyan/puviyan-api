@@ -50,7 +50,8 @@ function createPlantingPhotoAssessor({
       });
       if (response.status === 404)
         return { noSpeciesMatch: true, candidates: [], familySuggestions: [] };
-      if (!response.ok) return { unavailable: true };
+      if (!response.ok)
+        return { unavailable: true, httpStatus: response.status };
       const payload = await response.json();
       const candidates = (payload.results || [])
         .slice(0, 3)
@@ -85,6 +86,7 @@ function createPlantingPhotoAssessor({
       return {
         candidates,
         familySuggestions,
+        noSpeciesMatch: candidates.length === 0,
         provider: "plantnet",
         model: payload.version || null,
       };
@@ -144,7 +146,13 @@ function createPlantingPhotoAssessor({
           signal: AbortSignal.timeout(15000),
         },
       );
-      if (!response.ok) return { unavailable: true, provider: "google", model };
+      if (!response.ok)
+        return {
+          unavailable: true,
+          provider: "google",
+          model,
+          httpStatus: response.status,
+        };
       const payload = await response.json();
       const raw = payload.candidates?.[0]?.content?.parts
         ?.map((p) => p.text || "")
@@ -248,8 +256,14 @@ function createPlantingPhotoAssessor({
       ...new Set([
         ...(visual?.flags || []),
         ...(visual?.unavailable ? ["visual_assessment_unavailable"] : []),
+        ...(visual?.httpStatus
+          ? [`gemini_http_${visual.httpStatus}`]
+          : []),
         ...(plantnet?.unavailable
           ? ["species_identification_unavailable"]
+          : []),
+        ...(plantnet?.httpStatus
+          ? [`plantnet_http_${plantnet.httpStatus}`]
           : []),
         ...(plantnet?.noSpeciesMatch ? ["plantnet_no_species_match"] : []),
       ]),
