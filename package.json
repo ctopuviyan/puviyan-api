@@ -11,7 +11,7 @@
     "test": "jest --coverage",
     "lint": "eslint src/**/*.js",
     "format": "prettier --write \"src/**/*.js\"",
-    "test:partner-app": "node --test tests/partner-app.node-test.cjs tests/planting-monitoring.node-test.cjs tests/partner-management.node-test.cjs tests/sustainability-accounts.node-test.cjs"
+    "test:partner-app": "node --test tests/partner-app.node-test.cjs tests/planting-monitoring.node-test.cjs tests/planting-photo-assessment.node-test.cjs tests/partner-management.node-test.cjs tests/sustainability-accounts.node-test.cjs"
   },
   "keywords": [
     "puviyan",

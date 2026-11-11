@@ -363,7 +363,7 @@ test("retry with changed content conflicts, missing event and wrong project scop
       400,
     );
   }));
-test("planting HTTP routes create sessions, accept close-up/context photos and return growth detail", async () =>
+test("planting HTTP routes create sessions, accept one plant photo and return growth detail", async () =>
   fixture(async ({ request }) => {
     const sessionResponse = await request(
       "/projects/p1/plantings/captures",
@@ -405,11 +405,6 @@ test("planting HTTP routes create sessions, accept close-up/context photos and r
       "photo",
       new Blob([await photo({ r: 30, g: 120, b: 40 })]),
       "close.jpg",
-    );
-    form.set(
-      "contextPhoto",
-      new Blob([await photo({ r: 40, g: 90, b: 20 })]),
-      "context.jpg",
     );
     const created = await request("/projects/p1/plantings", "admin", form);
     assert.equal(created.status, 201);

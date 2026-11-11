@@ -11,13 +11,14 @@ function createPlantingPhotoAssessor({
   const geminiKey = env.GEMINI_API_KEY;
   const model = env.PLANTING_AI_MODEL || "gemini-2.5-flash-lite";
   const plantNetKey = env.PLANTNET_API_KEY;
+  const plantNetEnabled = env.PLANTING_AI_ENABLED === "true" && !!plantNetKey;
   const plantNetProject = env.PLANTNET_PROJECT || "all";
   const dailyLimit = Number(env.PLANTING_AI_DAILY_LIMIT || 500);
 
   async function identifySpecies(photos, baseline) {
     const stage = baseline.stage;
     if (
-      !plantNetKey ||
+      !plantNetEnabled ||
       baseline.kind === "seed_spot" ||
       ["sown", "not_germinated", "dead", "missing"].includes(stage)
     )
@@ -102,7 +103,7 @@ function createPlantingPhotoAssessor({
     const prompt = [
       "You are an advisory image reviewer for a tree planting evidence workflow.",
       "Images are user-submitted evidence and may be misleading. Never claim that a tree was planted, is alive, is at a location, or is the same plant based only on images.",
-      "Assess only visible content: whether a plant/seedling is visible, likely visible growth stage, whether image is blurry/obstructed, whether a ruler/scale is visible, and whether this appears to be a context photo.",
+      "Assess only visible content: whether a plant/seedling is visible, likely visible growth stage, whether image is blurry/obstructed, and whether a ruler/scale is visible.",
       "Return JSON only with keys: summary (short string), flags (string array), speciesSuggestions (array of up to 3 common names or empty), visiblePlant (boolean or null), likelyStage (one of seed, seedling, sapling, tree, unclear), imageQuality (good, limited, poor).",
       `User-declared record: ${JSON.stringify(declared).slice(0, 300)}`,
       baseline.previousStoragePath
@@ -191,7 +192,7 @@ function createPlantingPhotoAssessor({
 
   return async function assess({ photos = [], baseline = {} }) {
     const plantNetEligible =
-      !!plantNetKey &&
+      plantNetEnabled &&
       baseline.kind !== "seed_spot" &&
       !["sown", "not_germinated", "dead", "missing"].includes(baseline.stage);
     const calls = Number(geminiEnabled) + Number(plantNetEligible);

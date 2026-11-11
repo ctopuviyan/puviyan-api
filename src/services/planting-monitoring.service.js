@@ -295,8 +295,6 @@ function createPlantingMonitoring({
         await inspectPhoto(primary),
         ...(contextPhoto ? [await inspectPhoto(contextPhoto)] : []),
       ];
-      if (!legacy && photos.length < 2)
-        fail(400, "Add both a close-up and a wider planting-context photo.");
       const fingerprint = sha(
         JSON.stringify(data) + photos.map((p) => p.sha256).join(":"),
       );
@@ -363,7 +361,6 @@ function createPlantingMonitoring({
               );
             const flags = [];
             if (session.legacy) flags.push("legacy_capture_without_session");
-            if (photos.length < 2) flags.push("missing_planting_context");
             if (data.photoSource !== "camera")
               flags.push("gallery_capture_unverified");
             if (data.accuracyMeters > 5)
@@ -525,9 +522,8 @@ function createPlantingMonitoring({
         canObserve: context.canWrite && (!context.collaborations?.[p.data().orgId] || (context.providerCanWrite && context.collaborations[p.data().orgId] === 'write')),
         canReview: canReview(context) && (!context.collaborations?.[p.data().orgId] || (context.providerCanWrite && context.collaborations[p.data().orgId] === 'write')),
         aiConfigured:
-          (process.env.PLANTING_AI_ENABLED === "true" &&
-            !!process.env.GEMINI_API_KEY) ||
-          !!process.env.PLANTNET_API_KEY,
+          process.env.PLANTING_AI_ENABLED === "true" &&
+          (!!process.env.GEMINI_API_KEY || !!process.env.PLANTNET_API_KEY),
       };
     },
     async observe(context, projectId, treeId, input, primary, contextPhoto) {

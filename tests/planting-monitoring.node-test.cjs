@@ -79,7 +79,6 @@ test("planting baseline, five-metre conflict, follow-up history and second-perso
   const owner = c("admin");
   const reviewer = c("reviewer");
   const close = await image({ r: 30, g: 130, b: 40 });
-  const wide = await image({ r: 70, g: 100, b: 30 });
 
   const session = await service.beginCapture(owner, "planting1");
   const created = await service.baseline(
@@ -87,10 +86,9 @@ test("planting baseline, five-metre conflict, follow-up history and second-perso
     "planting1",
     metadata("a".repeat(32), session.id),
     close,
-    wide,
   );
   assert.equal(created.created, true);
-  assert.equal(files.size, 2);
+  assert.equal(files.size, 1);
 
   const duplicateSession = await service.beginCapture(owner, "planting1");
   await assert.rejects(
@@ -99,7 +97,6 @@ test("planting baseline, five-metre conflict, follow-up history and second-perso
       "planting1",
       metadata("b".repeat(32), duplicateSession.id),
       await image({ r: 90, g: 110, b: 30 }),
-      await image({ r: 60, g: 120, b: 20 }),
     ),
     (error) => error.status === 409 && /five metres/.test(error.message),
   );

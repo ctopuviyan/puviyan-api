@@ -56,7 +56,8 @@ Object.assign(env, {
   FIREBASE_STORAGE_BUCKET: process.env.PHOTO_BUCKET,
   PARTNER_TREE_PHOTO_BUCKET: process.env.PHOTO_BUCKET,
   PARTNER_APP_SIGNUP_URL: 'https://puviyan-partner-api-stage-sbkl4nndtq-el.a.run.app/api/v1/partner-app/v2/join',
-  PLANTING_AI_ENABLED: 'false'
+  PLANTING_AI_ENABLED: 'true',
+  PLANTING_AI_DAILY_LIMIT: '20'
 });
 fs.writeFileSync(process.env.ENV_OUTPUT_FILE, JSON.stringify(env));
 NODE

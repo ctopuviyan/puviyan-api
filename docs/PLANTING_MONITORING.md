@@ -5,14 +5,14 @@ The partner app can create planting records for seeds/planting spots, saplings, 
 ## Ground evidence
 
 - `POST /partner-app/projects/:projectId/plantings/captures` creates a 15-minute, single-use capture session. For a follow-up pass `plantingId`.
-- `POST /partner-app/projects/:projectId/plantings` accepts multipart `metadata`, `photo` (close-up), and `contextPhoto` (wide planting-area view).
+- `POST /partner-app/projects/:projectId/plantings` accepts multipart `metadata` and one `photo` of the plant.
 - `POST /partner-app/projects/:projectId/plantings/:plantingId/observations` appends a follow-up observation with the same multipart fields.
 - `GET /partner-app/projects/:projectId/plantings/:plantingId` returns the planting, chronological observation history, signed photo URLs, due state and reviewed measurements.
 - `GET /partner-app/projects/:projectId/plantings/nearby?latitude=...&longitude=...&radiusMeters=...` returns project-local planting pins within 1 km maximum.
 - `POST /partner-app/projects/:projectId/plantings/:plantingId/observations/:observationId/review` accepts `approved`, `rejected`, or `more_evidence`, a revision and a reviewer note.
 - `PATCH /partner-app/projects/:projectId/plantings/:plantingId/schedule` changes the follow-up interval using optimistic revision control.
 
-Capture metadata includes a random 32-hex `recordId`, session ID, capture and location timestamps, coordinate, horizontal accuracy, camera source, notes, stage, and optional measured height. Baselines also include kind, species/unknown, seed count and check interval. At baseline, the app requires a close-up and context image. Follow-ups are time ordered, must be within 25 m of the registered point, and are flagged when location matching is uncertain.
+Capture metadata includes a random 32-hex `recordId`, session ID, capture and location timestamps, coordinate, horizontal accuracy, camera source, notes, stage, and optional measured height. Baselines also include kind, species/unknown, seed count and check interval. Baseline and follow-up submissions each require one plant photo. Follow-ups are time ordered, must be within 25 m of the registered point, and are flagged when location matching is uncertain.
 
 When a project has a saved circular boundary, the API checks baseline and follow-up GPS coordinates against its centre/radius before persisting planting evidence. The same check protects the legacy tree route. New app projects require a boundary from 50 m to 10 km; projects created before this feature remain usable without a boundary.
 
@@ -22,9 +22,9 @@ All photos are re-encoded and held in the private partner photo bucket. Only the
 
 ## Review and AI
 
-AI photo assessment is an optional Gemini visual-check adapter and Pl@ntNet species-identification adapter (`src/services/planting-photo-assessment.service.js`). It is disabled unless `PLANTING_AI_ENABLED=true` and `GEMINI_API_KEY` are configured. `PLANTING_AI_MODEL` defaults to `gemini-2.5-flash-lite`; `PLANTNET_API_KEY` enables species and botanical-family suggestions for visible saplings/trees (`PLANTNET_PROJECT` defaults to `all`). Pl@ntNet receives the close-up image; Gemini assesses whether the submitted evidence visibly contains a plant and the likely growth stage. `PLANTING_AI_DAILY_LIMIT` defaults to 500 provider calls/day across both services and is enforced by a Firestore usage counter before calls. Missing keys, cap exhaustion, provider errors or malformed output leave the record saved and pending human review. AI results are advisory: they never approve evidence, set coordinates, or record growth measurements. A different organisation reviewer must approve, reject or request more evidence; the API requires a note and records an audit entry. The latest assessment is copied to the planting record for the project list, together with `updatedAt` and review status.
+AI photo assessment is an optional Gemini visual-check adapter and Pl@ntNet species-identification adapter (`src/services/planting-photo-assessment.service.js`). Both providers remain off unless `PLANTING_AI_ENABLED=true`; Gemini also requires `GEMINI_API_KEY`, while Pl@ntNet requires `PLANTNET_API_KEY`. `PLANTING_AI_MODEL` defaults to `gemini-2.5-flash-lite`; Pl@ntNet returns species and botanical-family suggestions for eligible visible saplings/trees (`PLANTNET_PROJECT` defaults to `all`). Both providers assess the one submitted plant photo. Gemini checks whether a plant is visible and its likely growth stage. `PLANTING_AI_DAILY_LIMIT` defaults to 500 provider calls/day across both services and is enforced by a Firestore usage counter before calls. Missing keys, cap exhaustion, provider errors or malformed output leave the record saved and pending human review. AI results are advisory: they never approve evidence, set coordinates, or record growth measurements. A different organisation reviewer must approve, reject or request more evidence; the API requires a note and records an audit entry. The latest assessment is copied to the planting record for the project list, together with `updatedAt` and review status.
 
-Do not enable the paid providers until the project owner has supplied/created the required restricted API key(s) in Secret Manager and accepted the billing/usage cap. The default staging service has no keys and AI remains off.
+Staging enables both providers with a limit of 20 provider calls per UTC day (at most 10 eligible plant submissions when both providers run). Production remains outside this deployment script. Keep a restricted key in Secret Manager and review provider billing and quota before increasing the cap.
 
 ## Remote site imagery
 
