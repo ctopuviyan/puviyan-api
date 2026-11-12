@@ -47,6 +47,7 @@ function createPlantingPhotoAssessor({
     url.searchParams.set("api-key", plantNetKey);
     url.searchParams.set("nb-results", "3");
     url.searchParams.set("detailed", "true");
+    url.searchParams.set("lang", env.PLANTNET_LANGUAGE || "en");
     try {
       const response = await fetchImpl(url, {
         method: "POST",
@@ -67,10 +68,15 @@ function createPlantingPhotoAssessor({
       const candidates = (payload.results || [])
         .slice(0, 3)
         .map((item) => {
+          const commonName = Array.isArray(item.species?.commonNames)
+            ? item.species.commonNames.find(
+                (name) => typeof name === "string" && name.trim(),
+              )
+            : null;
           const name =
+            commonName ||
             item.species?.scientificNameWithoutAuthor ||
-            item.species?.scientificName ||
-            item.species?.commonNames?.[0];
+            item.species?.scientificName;
           return typeof name === "string"
             ? `${name} (${Math.round((item.score || 0) * 100)}%)`
             : null;
