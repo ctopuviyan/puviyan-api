@@ -57,10 +57,19 @@ Object.assign(env, {
   PARTNER_TREE_PHOTO_BUCKET: process.env.PHOTO_BUCKET,
   PARTNER_APP_SIGNUP_URL: 'https://puviyan-partner-api-stage-sbkl4nndtq-el.a.run.app/api/v1/partner-app/v2/join',
   PLANTING_AI_ENABLED: 'true',
-  PLANTING_AI_DAILY_LIMIT: '20'
+  PLANTING_AI_MODEL: 'gemini-3.5-flash-lite',
+  PLANTING_AI_DAILY_LIMIT: '100'
 });
 fs.writeFileSync(process.env.ENV_OUTPUT_FILE, JSON.stringify(env));
 NODE
+
+SECRET_BINDINGS="GEMINI_API_KEY=GEMINI_API_KEY:latest"
+if gcloud secrets describe COPERNICUS_CLIENT_ID --project "$PROJECT_ID" >/dev/null 2>&1 &&
+  gcloud secrets describe COPERNICUS_CLIENT_SECRET --project "$PROJECT_ID" >/dev/null 2>&1; then
+  SECRET_BINDINGS+=",COPERNICUS_CLIENT_ID=COPERNICUS_CLIENT_ID:latest,COPERNICUS_CLIENT_SECRET=COPERNICUS_CLIENT_SECRET:latest"
+else
+  echo "Sentinel-2 vegetation imagery will remain disabled until both Copernicus OAuth secrets exist in Secret Manager."
+fi
 
 gcloud run deploy "$SERVICE_NAME" \
   --source . \
@@ -68,7 +77,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --region "$REGION" \
   --project "$PROJECT_ID" \
   --env-vars-file "$ENV_VARS_FILE" \
-  --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest,PLANTNET_API_KEY=PLANTNET_API_KEY:latest" \
+  --set-secrets "$SECRET_BINDINGS" \
   --allow-unauthenticated \
   --max-instances 10 \
   --memory 512Mi \

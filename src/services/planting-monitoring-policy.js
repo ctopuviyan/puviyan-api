@@ -17,6 +17,8 @@ const STAGES = [
   "tree",
   "dead",
   "missing",
+  "harvested",
+  "removed",
 ];
 function id(value) {
   if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(value))
@@ -44,23 +46,6 @@ function distance(a, b) {
       Math.sin(((b.longitude - a.longitude) * rad) / 2) ** 2;
   return 2 * EARTH_RADIUS * Math.asin(Math.min(1, Math.sqrt(h)));
 }
-// Earth-centred 25m cubes avoid longitude wrap/pole boundary holes. Transactions
-// read every neighbouring cube and update the centre cube, serialising 5m conflicts.
-function spatialCells(point) {
-  const lat = (point.latitude * Math.PI) / 180,
-    lon = (point.longitude * Math.PI) / 180;
-  const cell = [
-    Math.floor((EARTH_RADIUS * Math.cos(lat) * Math.cos(lon)) / 25),
-    Math.floor((EARTH_RADIUS * Math.cos(lat) * Math.sin(lon)) / 25),
-    Math.floor((EARTH_RADIUS * Math.sin(lat)) / 25),
-  ];
-  const keys = [];
-  for (let x = -1; x <= 1; x++)
-    for (let y = -1; y <= 1; y++)
-      for (let z = -1; z <= 1; z++)
-        keys.push(`${cell[0] + x}_${cell[1] + y}_${cell[2] + z}`);
-  return { centre: cell.join("_"), keys };
-}
 function captureMetadata(
   input,
   { baseline = false, tree = null, legacy = false, now = Date.now() } = {},
@@ -79,6 +64,8 @@ function captureMetadata(
       0,
       legacy ? 100 : 20,
     ),
+    // Clients predating source tagging retain the legacy duplicate policy.
+    locationSource: input.locationSource || "legacy_unverified",
     capturedAt: validDate(input.capturedAt, "Capture time"),
     locationCapturedAt: validDate(input.locationCapturedAt, "GPS time"),
     photoSource: input.photoSource,
@@ -87,6 +74,43 @@ function captureMetadata(
         ? ""
         : text(input.notes, "Notes", 1000),
   };
+  if (
+    ![
+      "phone_gps_nearby",
+      "ar_target_estimate",
+      "external_survey",
+      "map_corrected",
+      "legacy_unverified",
+    ].includes(data.locationSource)
+  )
+    fail(400, "Choose a supported planting location method.");
+  data.targetSelectionConfirmed = input.targetSelectionConfirmed === true;
+  data.vegetationCoveragePercent =
+    input.vegetationCoveragePercent == null
+      ? null
+      : number(input.vegetationCoveragePercent, "vegetation coverage", 0, 100);
+  data.vegetationCoverageOverride =
+    input.vegetationCoverageOverride === true &&
+    data.vegetationCoveragePercent != null &&
+    data.vegetationCoveragePercent < 80;
+  if (input.selectedTargetPoint != null) {
+    const point = input.selectedTargetPoint;
+    if (
+      !point ||
+      typeof point !== "object" ||
+      Array.isArray(point) ||
+      typeof point.x !== "number" ||
+      typeof point.y !== "number" ||
+      !Number.isFinite(point.x) ||
+      !Number.isFinite(point.y) ||
+      point.x < 0 ||
+      point.x > 1 ||
+      point.y < 0 ||
+      point.y > 1
+    )
+      fail(400, "Choose a valid target point on the camera viewfinder.");
+    data.selectedTargetPoint = { x: point.x, y: point.y };
+  }
   // Empty notes are valid, while non-string/oversized notes are not.
   if (input.notes == null || input.notes === "") data.notes = "";
   if (!["camera", "gallery"].includes(data.photoSource))
@@ -130,7 +154,7 @@ function captureMetadata(
           input.survivingCount,
           "surviving plant count",
           0,
-          tree?.seedCount || 1,
+          10000000,
         );
   if (data.survivingCount != null && !Number.isInteger(data.survivingCount))
     fail(400, "Use a whole-number plant count.");
@@ -250,7 +274,6 @@ module.exports = {
   id,
   number,
   distance,
-  spatialCells,
   captureMetadata,
   inspectPhoto,
   similar,

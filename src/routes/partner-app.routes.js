@@ -11,12 +11,13 @@ const { createSustainabilityRouter } = require('./sustainability-accounts.routes
 const { requirePasswordIdentity } = require('../services/sustainability-accounts.service');
 const { createPlantingMonitoring } = require('../services/planting-monitoring.service');
 const { createPlantingPhotoAssessor } = require('../services/planting-photo-assessment.service');
-const { spatialCells, distance } = require('../services/planting-monitoring-policy');
+const { createProjectVegetation } = require('../services/project-vegetation.service');
+const { createPiaTreeCarbonImpact } = require('../services/pia-tree-carbon-impact.service');
 const { geohashForLocation } = require('geofire-common');
 
 // Reuse the shared API's initialized Firebase apps; dependencies remain injectable for tests.
 function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
-  getBucket = getPartnerTreeBucket, logger = console, managementOptions = {}, sustainabilityOptions = {}, monitoringOptions = {} } = {}) {
+  getBucket = getPartnerTreeBucket, logger = console, managementOptions = {}, sustainabilityOptions = {}, monitoringOptions = {}, vegetationOptions = {} } = {}) {
   const router = express.Router();
   router.use(apiLimiter);
   router.use('/v2', createSustainabilityRouter({db,auth,options:sustainabilityOptions}));
@@ -25,6 +26,8 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   const management = createPartnerManagement({ db, auth, ...managementOptions });
   const assess = monitoringOptions.assess || createPlantingPhotoAssessor({ db });
   const monitoring = createPlantingMonitoring({ db, getBucket, logger, ...monitoringOptions, assess });
+  const vegetation = createProjectVegetation(vegetationOptions);
+  const carbonImpact = createPiaTreeCarbonImpact({ db });
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 1, fieldSize: 16 * 1024 } });
   router.use(async (req, _res, next) => {
     try {
@@ -117,6 +120,19 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     const snapshot = await db.collection('organizations').limit(500).get();
     res.json({ organisations: snapshot.docs.map(d => ({ id: d.id, name: d.data().name || d.id })) });
   }));
+  router.get('/projects/carbon-impact/organisation', wrap(async (req, res) => {
+    const c = req.context;
+    const orgId = req.query.orgId || c.orgId;
+    if (!orgId) fail(400, 'Choose an organisation to view its carbon impact.');
+    if (orgId !== c.orgId && !c.collaborations?.[orgId]) assertOrg(c, orgId);
+    const org = await db.collection('organizations').doc(orgId).get();
+    if (!org.exists) fail(404, 'Organisation not found.');
+    const projectSnapshot = await projects.where('orgId', '==', orgId).limit(500).get();
+    const visible = projectSnapshot.docs
+      .filter(doc => !c.departmentScoped || c.departmentIds.includes(doc.data().departmentId))
+      .filter(doc => !c.collaborations?.[doc.data().orgId] || Object.hasOwn(c.collaborations, doc.data().orgId));
+    res.json(await carbonImpact.calculateOrganisation(orgId, visible));
+  }));
   router.get('/projects', wrap(async (req, res) => {
     const c = req.context;
     const requestedOrgId = req.query.orgId || null;
@@ -172,15 +188,16 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   router.get('/projects/:id', wrap(async (req, res) => {
     const { ref, project } = await loadProject(req);
     const [events, trees] = await Promise.all([ref.collection('events').limit(500).get(), ref.collection('trees').limit(500).get()]);
+    const impact = await carbonImpact.calculateProject(ref.id, project);
     const records = await Promise.all(trees.docs.map(async doc => {
       const { storagePath, contextStoragePath, fingerprint, imageHashes, perceptualHash, contextPerceptualHash, captureSessionId, ...record } = doc.data();
       // Only authenticated, scoped reads mint short-lived URLs; the bucket stays private.
       const [photoUrl] = await getBucket().file(storagePath).getSignedUrl({ action: 'read', expires: Date.now() + 15 * 60 * 1000 });
-      const result = { id: doc.id, ...record, photoUrl };
+      const result = { id: doc.id, ...record, photoUrl, carbonImpact: impact?.plantings[doc.id] || null };
       if (contextStoragePath) [result.contextPhotoUrl] = await getBucket().file(contextStoragePath).getSignedUrl({ action: 'read', expires: Date.now() + 15 * 60 * 1000 });
       return result;
     }));
-    res.json({ project: { id: ref.id, ...project }, events: sortLatest(events.docs.map(serialise)), trees: sortLatest(records) });
+    res.json({ project: { id: ref.id, ...project, carbonImpact: impact?.summary || null }, events: sortLatest(events.docs.map(serialise)), trees: sortLatest(records) });
   }));
   router.post('/projects/:id/events', wrap(async (req, res) => {
     const { ref, project } = await loadProject(req, true);
@@ -227,17 +244,10 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
           if (current.data().createdByUid !== req.context.uid || current.data().fingerprint !== fingerprint) fail(409, 'This record ID already has different details.');
           return false;
         }
-        const cell = spatialCells(data);
-        const neighbours = await Promise.all(cell.keys.map(key => tx.get(db.collection('partnerPlantingCells').doc(key))));
-        const nearby = neighbours.flatMap(doc => doc.data()?.points || []);
-        if (nearby.some(point => distance(data, point) <= 5)) fail(409, 'A planting is already registered within five metres. Open the existing record and add a growth observation.');
-        const centre = neighbours.find(doc => doc.id === cell.centre)?.data()?.points || [];
-        if (centre.length >= 200) fail(409, 'This location needs index reconciliation before another registration.');
         const createdAt = new Date().toISOString();
         const point = { projectId: ref.id, treeId: treeRef.id, orgId: project.orgId, latitude: data.latitude, longitude: data.longitude, accuracyMeters: data.accuracyMeters };
         tx.create(treeRef, { ...data, projectId: ref.id, orgId: project.orgId, departmentId: project.departmentId || null,
           storagePath, fingerprint, createdByUid: req.context.uid, createdAt, verificationStatus: 'submitted' });
-        tx.set(db.collection('partnerPlantingCells').doc(cell.centre), { points: [...centre, point], updatedAt: createdAt });
         tx.create(db.collection('partnerPlantingLocations').doc(`${ref.id}_${treeRef.id}`), { ...point, geohash: geohashForLocation([data.latitude, data.longitude]), createdAt });
         return true;
       });
@@ -263,6 +273,16 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   }));
   router.get('/projects/:id/plantings/nearby', wrap(async (req,res) => res.json(await monitoring.nearby(req.context,req.params.id,req.query))));
   router.get('/projects/:id/plantings/remote-imagery', wrap(async (req,res) => res.json(await monitoring.remoteList(req.context,req.params.id))));
+  router.get('/projects/:id/vegetation', wrap(async (req, res) => {
+    const { project } = await loadProject(req);
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json(await vegetation.image({
+      projectId: req.params.id,
+      boundary: project.boundary,
+      from: req.query.from,
+      to: req.query.to,
+    }));
+  }));
   router.post('/projects/:id/plantings/remote-imagery', plantingUpload.single('photo'), wrap(async (req,res) => {
     if(!req.file) fail(400,'An imagery preview is required.');
     const result=await monitoring.remote(req.context,req.params.id,parsePlanting(req),req.file.buffer);res.status(result.created?201:200).json(result);

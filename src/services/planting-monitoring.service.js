@@ -12,7 +12,6 @@ const {
   id,
   number,
   distance,
-  spatialCells,
   captureMetadata,
   inspectPhoto,
   similar,
@@ -29,7 +28,6 @@ function createPlantingMonitoring({
   assess = async () => ({ status: "not_configured" }),
 }) {
   const projects = db.collection("partnerProjects"),
-    cells = db.collection("partnerPlantingCells"),
     locations = db.collection("partnerPlantingLocations"),
     images = db.collection("partnerPlantingImages"),
     sessions = db.collection("partnerCaptureSessions");
@@ -235,10 +233,10 @@ function createPlantingMonitoring({
         ? result.flags.filter((v) => typeof v === "string").slice(0, 20)
         : [],
       speciesSuggestions: Array.isArray(result.speciesSuggestions)
-        ? result.speciesSuggestions.slice(0, 5)
+        ? result.speciesSuggestions.slice(0, 1)
         : [],
       familySuggestions: Array.isArray(result.familySuggestions)
-        ? result.familySuggestions.filter((v) => typeof v === "string").slice(0, 5)
+        ? result.familySuggestions.filter((v) => typeof v === "string").slice(0, 1)
         : [],
       providerDiagnostics: Array.isArray(result.providerDiagnostics)
         ? result.providerDiagnostics
@@ -248,10 +246,18 @@ function createPlantingMonitoring({
         : [],
       visiblePlant:
         typeof result.visiblePlant === "boolean" ? result.visiblePlant : null,
+      visiblePlantCount:
+        Number.isInteger(result.visiblePlantCount) && result.visiblePlantCount >= 0
+          ? Math.min(result.visiblePlantCount, 50)
+          : null,
       likelyStage:
         typeof result.likelyStage === "string" ? result.likelyStage : null,
       imageQuality:
         typeof result.imageQuality === "string" ? result.imageQuality : null,
+      plantIdentityMatch:
+        typeof result.plantIdentityMatch === "boolean"
+          ? result.plantIdentityMatch
+          : null,
       assessedAt: stamp(),
     };
     const treeRef = projects.doc(projectId).collection("trees").doc(treeId);
@@ -261,10 +267,77 @@ function createPlantingMonitoring({
         { merge: true },
       ),
       treeRef.set(
-        { aiAssessment: safe, updatedAt: safe.assessedAt },
+        {
+          aiAssessment: safe,
+          updatedAt: safe.assessedAt,
+          ...(obsId === "baseline" && safe.familySuggestions[0]
+            ? { plantFamily: safe.familySuggestions[0] }
+            : {}),
+          ...(obsId === "baseline" && safe.speciesSuggestions[0]
+            ? {
+                species: safe.speciesSuggestions[0].replace(/\s+\(\d+%\)$/, ""),
+                speciesSource: "ai_highest_match",
+              }
+            : {}),
+        },
         { merge: true },
       ),
     ]);
+    if (obsId === "baseline" && safe.familySuggestions[0]) {
+      const tree = await treeRef.get();
+      const location = tree.data() || {};
+      const bounds = geohashQueryBounds(
+        [location.latitude, location.longitude],
+        2,
+      );
+      const pages = await Promise.all(
+        bounds.map(([start, end]) =>
+          locations.orderBy("geohash").startAt(start).endAt(end).limit(100).get(),
+        ),
+      );
+      const candidates = new Set();
+      for (const page of pages) {
+        for (const pointDoc of page.docs) {
+          const point = pointDoc.data();
+          if (
+            point.projectId === projectId &&
+            point.treeId !== treeId &&
+            distance(location, point) <= 2
+          ) candidates.add(point.treeId);
+        }
+      }
+      const matches = [];
+      for (const candidateId of candidates) {
+        const candidateRef = projects.doc(projectId).collection("trees").doc(candidateId);
+        const candidate = await candidateRef.get();
+        if (candidate.exists && candidate.data().plantFamily === safe.familySuggestions[0]) {
+          matches.push(candidateRef);
+        }
+      }
+      if (matches.length) {
+        const duplicateFlag = "same_location_same_family";
+        const refs = [
+          treeRef,
+          treeRef.collection("observations").doc("baseline"),
+          ...matches.flatMap((ref) => [
+            ref,
+            ref.collection("observations").doc("baseline"),
+          ]),
+        ];
+        await db.runTransaction(async (tx) => {
+          const docs = await Promise.all(refs.map((ref) => tx.get(ref)));
+          docs.forEach((doc, index) => {
+            if (!doc.exists) return;
+            tx.set(refs[index], {
+              flags: [...new Set([...(doc.data().flags || []), duplicateFlag])],
+              sameLocationFamilyMatch: true,
+              updatedAt: stamp(),
+            }, { merge: true });
+          });
+        });
+        safe.flags = [...new Set([...safe.flags, duplicateFlag])];
+      }
+    }
     return safe;
   }
   return {
@@ -318,6 +391,7 @@ function createPlantingMonitoring({
         kind: data.kind,
         stage: data.stage,
         species: data.species,
+        selectedTargetPoint: data.selectedTargetPoint || null,
       };
       const assessment = await requestAssessment(
         projectId,
@@ -336,8 +410,7 @@ function createPlantingMonitoring({
           422,
           "The photo does not clearly show a plant. Take one clear photo of the seedling or tree and try again.",
         );
-      const cell = spatialCells(data),
-        pointId = locationId(projectId, ref.id);
+      const pointId = locationId(projectId, ref.id);
       const result = await storePhotos(
         initial.data(),
         projectId,
@@ -374,46 +447,13 @@ function createPlantingMonitoring({
                   "The selected event does not belong to this project.",
                 );
             }
-            const neighbours = await Promise.all(
-              cell.keys.map((key) => tx.get(cells.doc(key))),
-            );
-            const nearby = neighbours.flatMap((d) => d.data()?.points || []);
-            if (nearby.some((p) => distance(data, p) <= 5))
-              fail(
-                409,
-                "A planting is already registered within five metres. Open the existing record and add a growth observation.",
-              );
             await checkedPhotoHashes(tx, photos);
-            const centre =
-              neighbours.find((d) => d.id === cell.centre)?.data()?.points ||
-              [];
-            if (centre.length >= 200)
-              fail(
-                409,
-                "This location needs index reconciliation before another registration.",
-              );
             const flags = [];
             if (session.legacy) flags.push("legacy_capture_without_session");
             if (data.photoSource !== "camera")
               flags.push("gallery_capture_unverified");
-            if (data.accuracyMeters > 5)
-              flags.push("gps_accuracy_exceeds_spacing");
-            if (
-              nearby.some(
-                (p) =>
-                  distance(data, p) -
-                    data.accuracyMeters -
-                    (p.accuracyMeters || 0) <=
-                  5,
-              )
-            )
-              flags.push("spacing_uncertain_due_to_gps");
-            if (
-              nearby.some((p) =>
-                similar(photos[0].perceptualHash, p.perceptualHash),
-              )
-            )
-              flags.push("visually_similar_nearby_photo");
+            if (data.vegetationCoverageOverride)
+              flags.push("low_vegetation_coverage_override");
             const point = {
               projectId,
               treeId: ref.id,
@@ -421,6 +461,7 @@ function createPlantingMonitoring({
               latitude: data.latitude,
               longitude: data.longitude,
               accuracyMeters: data.accuracyMeters,
+              locationSource: data.locationSource,
               perceptualHash: photos[0].perceptualHash,
             };
             const createdAt = stamp();
@@ -466,10 +507,6 @@ function createPlantingMonitoring({
             };
             tx.create(ref, root);
             tx.create(obsRef, obs);
-            tx.set(cells.doc(cell.centre), {
-              points: [...centre, point],
-              updatedAt: createdAt,
-            });
             tx.create(locations.doc(pointId), {
               ...point,
               geohash: geohashForLocation([data.latitude, data.longitude]),
@@ -554,7 +591,7 @@ function createPlantingMonitoring({
         canReview: canReview(context) && (!context.collaborations?.[p.data().orgId] || (context.providerCanWrite && context.collaborations[p.data().orgId] === 'write')),
         aiConfigured:
           process.env.PLANTING_AI_ENABLED === "true" &&
-          (!!process.env.GEMINI_API_KEY || !!process.env.PLANTNET_API_KEY),
+          !!process.env.GEMINI_API_KEY,
       };
     },
     async observe(context, projectId, treeId, input, primary, contextPhoto) {
@@ -582,6 +619,7 @@ function createPlantingMonitoring({
         stage: data.stage,
         species: initial.data().species,
         previousStoragePath: initial.data().storagePath,
+        selectedTargetPoint: data.selectedTargetPoint || null,
       };
       const assessment = await requestAssessment(
         projectId,
@@ -590,6 +628,18 @@ function createPlantingMonitoring({
         photos,
         assessmentBaseline,
       );
+      const latestFamily = assessment?.familySuggestions?.[0];
+      const registeredFamily = initial.data().plantFamily;
+      if (latestFamily && registeredFamily) {
+        const familyMatches = latestFamily === registeredFamily;
+        assessment.plantIdentityMatch =
+          familyMatches && distance(data, initial.data()) <= 25;
+        if (!familyMatches) {
+          assessment.flags = [
+            ...new Set([...(assessment.flags || []), "plant_family_mismatch"]),
+          ];
+        }
+      }
       if (
         !["sown", "not_germinated", "dead", "missing"].includes(
           assessmentBaseline.stage,
@@ -651,8 +701,15 @@ function createPlantingMonitoring({
               );
             await checkedPhotoHashes(tx, photos);
             const flags = [];
+            const plantedCount = tree.kind === "seed_spot"
+              ? Number(tree.seedCount || 0)
+              : 1;
+            if (data.survivingCount != null && data.survivingCount > plantedCount)
+              flags.push("surviving_count_exceeds_planted");
             if (data.photoSource !== "camera")
               flags.push("gallery_capture_unverified");
+            if (data.vegetationCoverageOverride)
+              flags.push("low_vegetation_coverage_override");
             if (displacement > 5 || data.accuracyMeters > 5)
               flags.push("location_match_uncertain");
             if (similar(photos[0].perceptualHash, tree.perceptualHash))
@@ -736,17 +793,60 @@ function createPlantingMonitoring({
             "Add a note explaining the review decision and any flagged evidence.",
           );
         const reviewedAt = stamp();
+        const manualOverrideReason =
+          body.decision === "approved" &&
+          old.flags?.includes("same_location_same_family")
+            ? "same_location_same_family"
+            : null;
         tx.update(obsRef, {
           reviewStatus: body.decision,
           reviewNote: note,
           reviewedBy: context.uid,
           reviewedAt,
+          ...(manualOverrideReason
+            ? {
+                manualOverrideReason,
+                manualOverrideAt: reviewedAt,
+                manualOverrideByUid: context.uid,
+              }
+            : {}),
           revision: old.revision + 1,
         });
         tx.update(ref, {
           updatedAt: reviewedAt,
           latestReviewStatus: body.decision,
+          ...(manualOverrideReason
+            ? {
+                manualOverride: {
+                  reason: manualOverrideReason,
+                  reviewedAt,
+                  reviewedByUid: context.uid,
+                  note,
+                },
+              }
+            : {}),
         });
+        if (body.decision === "approved") {
+          const terminal = ["dead", "missing", "harvested", "removed"].includes(old.stage);
+          const previousSurvivalAt = tree.data().latestVerifiedSurvivalAt;
+          if (
+            (terminal || old.survivingCount != null) &&
+            (!previousSurvivalAt ||
+              Date.parse(old.capturedAt) >= Date.parse(previousSurvivalAt))
+          ) {
+            tx.update(ref, {
+              latestVerifiedStage: old.stage,
+              latestVerifiedSurvivalAt: old.capturedAt,
+              latestVerifiedSurvivalObservationId: obsId,
+              latestVerifiedSurvivalReviewedAt: reviewedAt,
+              latestVerifiedSurvivalReviewedByUid: context.uid,
+              latestVerifiedSurvivingCount: terminal
+                ? 0
+                : old.survivingCount ?? null,
+            });
+          }
+          tx.set(projectRef, { piaTreeCarbonImpactDirty: true }, { merge: true });
+        }
         const last = tree.data().lastApprovedObservationAt;
         if (
           body.decision === "approved" &&
@@ -779,11 +879,13 @@ function createPlantingMonitoring({
           note,
           reviewedBy: context.uid,
           reviewedAt,
+          manualOverrideReason,
         });
         audit(tx, context, projectId, obsId, "observation.reviewed", {
           treeId,
           decision: body.decision,
           note,
+          manualOverrideReason,
         });
         return { success: true, reviewStatus: body.decision };
       });
@@ -834,19 +936,21 @@ function createPlantingMonitoring({
         const tree = doc.data();
         if (tree.createdByUid !== context.uid && !canReview(context))
           fail(403, "Only the recorder or an organisation reviewer can confirm species.");
-        const suggestions = tree.aiAssessment?.speciesSuggestions || [];
-        if (!suggestions.includes(suggestion))
-          fail(400, "Choose a species suggestion from the latest photo assessment.");
         const species = suggestion.replace(/\s+\(\d+%\)$/, "");
+        const suggestions = tree.aiAssessment?.speciesSuggestions || [];
+        const source = suggestions.includes(suggestion)
+          ? "ai_highest_match"
+          : "manual_override";
         tx.update(ref, {
           species,
+          speciesSource: source,
           speciesConfirmedAt: stamp(),
           speciesConfirmedByUid: context.uid,
           revision: (tree.revision || 1) + 1,
         });
         audit(tx, context, projectId, treeId, "planting.species.confirmed", {
           species,
-          source: "ai_suggestion",
+          source,
         });
         return { success: true, species };
       });

@@ -13,8 +13,10 @@ All paths below are relative to `/api/v1` (or the configured `API_VERSION`). The
 | GET | `/partner-app/projects?orgId=...` | Projects within the caller's allowed scope |
 | POST | `/partner-app/projects` | Create a scoped project |
 | GET | `/partner-app/projects/:id` | Project, events, and tree records with temporary photo links |
+| GET | `/partner-app/projects/carbon-impact/organisation?orgId=...` | PIA impact summary for an organisation and its visible projects |
 | POST | `/partner-app/projects/:id/events` | Create an event within a project |
 | POST | `/partner-app/projects/:id/trees` | Record a tree with a photo and phone GPS |
+| GET | `/partner-app/projects/:id/vegetation?from=YYYY-MM-DD&to=YYYY-MM-DD` | Project-boundary Sentinel-2 L2A NDVI image |
 
 New project requests require `startDate` and `endDate` in `YYYY-MM-DD` format, where the end date is on or after the start date. They also include a circular boundary:
 
@@ -31,7 +33,22 @@ Plant Trees project requests may also include `treeGoal` as a positive integer f
 
 The centre must contain valid latitude/longitude values and the radius must be 50–10,000 metres. New app project creation requires this selection. The API checks both the legacy tree route and the planting baseline/follow-up routes against the saved boundary. A point outside it is rejected. Existing projects without a boundary remain compatible and do not receive this check until a boundary is added.
 
-The tree endpoint accepts multipart form data: one `photo` JPEG/PNG file (up to 8 MiB) and a JSON `metadata` field. Metadata includes a 32-character hexadecimal `recordId`, species, optional notes/event ID, latitude, longitude, accuracy in metres, `capturedAt`, `locationCapturedAt`, and `photoSource` (`camera` or `gallery`). Retrying the same record ID and payload returns the saved record; conflicting payloads return 409.
+The planting baseline and observation endpoints accept one `photo` JPEG/PNG file (up to 8 MiB) and a JSON `metadata` field. Metadata includes a 32-character hexadecimal `recordId`, location source, accuracy in metres, `targetSelectionConfirmed`, optional normalized `selectedTargetPoint` (`x` and `y`, each 0–1), optional `vegetationCoveragePercent` and `vegetationCoverageOverride`, `capturedAt`, `locationCapturedAt`, camera source, stage, and relevant planting fields. The app locks zoom at 1× and estimates green-pixel coverage within the outlined viewfinder. Below 80%, users can continue after confirming an organisation-review warning; the stored document receives `low_vegetation_coverage_override`. Users tap the target to set autofocus and guide Gemini assessment. Gemini is the only enabled provider; Pl@ntNet is disabled. Gemini may return an advisory `visiblePlantCount`, common plant-name and family suggestions, and `multiple_plants_visible` flag when the frame appears to contain several plant targets; it neither derives coordinates nor confirms that planting occurred.
+
+No minimum-spacing rule is applied between planting records. The API stores each baseline's GPS coordinate and top detected family. A pin within 2 m of another record in the project with the same family is flagged as a possible duplicate and remains available for organisation review; approving it records the manual override reason. Follow-up assessments compare the detected family with the baseline family and report whether location and family are consistent. The highest-scoring species name is surfaced as the default and can be manually edited. The live camera plant-height estimate uses a lightweight foliage/stem color heuristic inside the outlined viewfinder, not a trained segmentation model, so it is a capture aid rather than proof of distance. Retrying the same record ID and payload returns the saved record; conflicting payloads return 409.
+
+### Project vegetation imagery
+
+The authenticated vegetation endpoint checks the caller's project access, then requests a Sentinel-2 L2A NDVI raster for that project's saved circular boundary. It accepts a date range of up to one year, selects the least-cloudy available imagery, excludes cloud/shadow/no-data pixels, and returns a colorized PNG plus its bounds and effective pixel size. The API keeps Copernicus OAuth credentials server-side and caches successful results in memory for three hours. The app supports pinch zoom on the returned raster; imagery is area-level context and cannot verify individual trees. Sentinel-2's native multispectral resolution is 10 metres, and output resolution may be coarser for large project boundaries.
+
+To enable this in staging, create a Copernicus Data Space Sentinel Hub OAuth client using the **client credentials** grant, then create these two Secret Manager secrets in `puviyan-partner-stage`:
+
+```sh
+printf '%s' 'CLIENT_ID' | gcloud secrets create COPERNICUS_CLIENT_ID --data-file=- --project puviyan-partner-stage
+printf '%s' 'CLIENT_SECRET' | gcloud secrets create COPERNICUS_CLIENT_SECRET --data-file=- --project puviyan-partner-stage
+```
+
+If a secret already exists, add a new version with `gcloud secrets versions add SECRET_NAME --data-file=- --project puviyan-partner-stage`. Grant `roles/secretmanager.secretAccessor` on both secrets to `puviyan-partner-api-runtime@puviyan-partner-stage.iam.gserviceaccount.com`. The stage deploy script binds both secrets when present; until then the endpoint reports that Sentinel-2 is not configured.
 
 ## Existing Firebase connections
 
@@ -52,7 +69,8 @@ Collections are `partnerProjects/{projectId}`, with `events` and `trees` subcoll
 1. The service is deployed with `./deploy-partner-api.sh stage`; it targets Cloud Run in `puviyan-partner-stage` and sets both Firebase project IDs to that project.
 2. Runtime identity `puviyan-partner-api-runtime@puviyan-partner-stage.iam.gserviceaccount.com` has Firestore and Firebase Auth access in the partner project. Cloud Run skips local dotenv files and uses Application Default Credentials; `.gcloudignore` excludes env and service-account files.
 3. Photos use the private bucket `puviyan-partner-stage-partner-photos` in `asia-south1` with uniform bucket-level access and public access prevention. The runtime identity has object access only on that bucket. Profile-image URLs use Firebase download tokens without public ACLs; planting images use temporary signed URLs.
-4. The Flutter staging config targets `https://puviyan-partner-api-stage-sbkl4nndtq-el.a.run.app/api/v1`. Signup calls use the root paths; project and tree calls append `/partner-app` automatically.
+4. Sentinel-2 project vegetation images use the Copernicus Data Space Process API. OAuth credentials belong only in Secret Manager as `COPERNICUS_CLIENT_ID` and `COPERNICUS_CLIENT_SECRET`; see the setup above.
+5. The Flutter staging config targets `https://puviyan-partner-api-stage-sbkl4nndtq-el.a.run.app/api/v1`. Signup calls use the root paths; project and tree calls append `/partner-app` automatically.
 
 Photo storage is resolved lazily. Missing `PARTNER_TREE_PHOTO_BUCKET` returns 503 on photo operations; it does not prevent API startup, existing endpoints, or empty project/event operations. No service-account key belongs in the mobile app. Keep direct mobile Firestore/Storage access denied for the project records and photo paths.
 
