@@ -64,6 +64,15 @@ fs.writeFileSync(process.env.ENV_OUTPUT_FILE, JSON.stringify(env));
 NODE
 
 SECRET_BINDINGS="GEMINI_API_KEY=GEMINI_API_KEY:latest"
+if gcloud secrets describe GOOGLE_MAPS_STATIC_API_KEY --project "$PROJECT_ID" >/dev/null 2>&1; then
+  gcloud secrets add-iam-policy-binding GOOGLE_MAPS_STATIC_API_KEY \
+    --project "$PROJECT_ID" \
+    --member="serviceAccount:puviyan-partner-api-runtime@puviyan-partner-stage.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor" >/dev/null
+  SECRET_BINDINGS+=",GOOGLE_MAPS_STATIC_API_KEY=GOOGLE_MAPS_STATIC_API_KEY:latest"
+else
+  echo "Water-body report map previews will remain unavailable until GOOGLE_MAPS_STATIC_API_KEY exists in Secret Manager."
+fi
 if gcloud secrets describe COPERNICUS_CLIENT_ID --project "$PROJECT_ID" >/dev/null 2>&1 &&
   gcloud secrets describe COPERNICUS_CLIENT_SECRET --project "$PROJECT_ID" >/dev/null 2>&1; then
   SECRET_BINDINGS+=",COPERNICUS_CLIENT_ID=COPERNICUS_CLIENT_ID:latest,COPERNICUS_CLIENT_SECRET=COPERNICUS_CLIENT_SECRET:latest"

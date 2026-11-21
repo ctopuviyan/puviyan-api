@@ -19,6 +19,7 @@ const {
   canReview,
   publicRecord,
 } = require("./planting-monitoring-policy");
+const { addUtcMonths } = require("./in-app-project-notifications.service");
 const sha = (value) => crypto.createHash("sha256").update(value).digest("hex");
 function createPlantingMonitoring({
   db,
@@ -487,6 +488,8 @@ function createPlantingMonitoring({
               latestObservationAt: data.capturedAt,
               observationCount: 1,
               nextCheckDueAt: dueAt(data.capturedAt, data.intervalDays),
+              growthReminderDueAt: addUtcMonths(data.capturedAt),
+              growthReminderStatus: "scheduled",
               revision: 1,
               flags,
             };
@@ -737,6 +740,9 @@ function createPlantingMonitoring({
               updatedAt: createdAt,
               latestReviewStatus: "pending",
               observationCount: (tree.observationCount || 1) + 1,
+              growthReminderDueAt: addUtcMonths(data.capturedAt),
+              growthReminderStatus: "scheduled",
+              growthReminderSentAt: null,
               revision: (tree.revision || 1) + 1,
             });
             saveHashes(tx, photos, projectId, ref.id, obsRef.id);

@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const crypto = require('node:crypto');
-const { fail, contextFor, assertOrg, assertProject, text, validDate, projectBoundary, assertProjectBoundary, treeMetadata, imageType } = require('../services/partner-project-policy');
+const { fail, contextFor, assertOrg, text, validDate, projectBoundary, assertProjectBoundary, treeMetadata, imageType } = require('../services/partner-project-policy');
 
 const { getFirestore, getPartnerAuth } = require('../config/firebase.config');
 const { apiLimiter } = require('../middleware/rateLimit.middleware');
@@ -13,6 +13,9 @@ const { createPlantingMonitoring } = require('../services/planting-monitoring.se
 const { createPlantingPhotoAssessor } = require('../services/planting-photo-assessment.service');
 const { createProjectVegetation } = require('../services/project-vegetation.service');
 const { createPiaTreeCarbonImpact } = require('../services/pia-tree-carbon-impact.service');
+const { createInAppProjectNotifications } = require('../services/in-app-project-notifications.service');
+const { PARTNER_TYPES, buildWaterBodyProject, queuePartnerNotifications, saveProjectRelations } = require('../services/water-body-project');
+const waterOutcomeMasters = require('../services/water-body-outcomes');
 const { geohashForLocation } = require('geofire-common');
 
 // Reuse the shared API's initialized Firebase apps; dependencies remain injectable for tests.
@@ -28,6 +31,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   const monitoring = createPlantingMonitoring({ db, getBucket, logger, ...monitoringOptions, assess });
   const vegetation = createProjectVegetation(vegetationOptions);
   const carbonImpact = createPiaTreeCarbonImpact({ db });
+  const inAppNotifications = createInAppProjectNotifications({ db });
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 1, fieldSize: 16 * 1024 } });
   router.use(async (req, _res, next) => {
     try {
@@ -43,7 +47,10 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
         await requirePasswordIdentity(auth,req.identity);
         const org = await db.collection('organizations').doc(membership.data().orgId).get();
         if (!org.exists || org.data().status !== 'active') fail(403,'The organisation is inactive.');
-        if (!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) || (req.path === '/account' && req.method !== 'GET')) fail(403,'Use the sustainability v2 account and member APIs.');
+        const isProjectPartnerLookup = req.path === '/project-partners' && req.method === 'GET';
+        const isWaterBodyMasterRead = req.path === '/water-body/masters' && req.method === 'GET';
+        const isMapTilesToken = req.path === '/maps/tiles/token' && req.method === 'GET';
+        if ((!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) && !isProjectPartnerLookup && !isWaterBodyMasterRead && !isMapTilesToken) || (req.path === '/account' && req.method !== 'GET')) fail(403,'Use the sustainability v2 account and member APIs.');
         if (req.method === 'POST' && /\/trees$/.test(req.path)) fail(410,'Update the app to submit planting evidence with a capture session.');
       }
       next();
@@ -72,6 +79,25 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       req.context = contextFor(req.identity.uid,data,collaborationMap); next();
     } catch(error) { next(error); }
   });
+  // Issue short-lived OAuth credentials for Google Map Tiles. The runtime
+  // identity has only Service Usage Consumer permission; never ship a
+  // long-lived Maps API key in the Flutter bundle.
+  router.get('/maps/tiles/token', wrap(async (req, res) => {
+    if (!req.context?.uid) fail(401, 'Please sign in to continue.');
+    const metadataUrl = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
+    const response = await fetch(metadataUrl, {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      logger.error?.('Map Tiles OAuth token request failed', { status: response.status });
+      fail(503, '3D map access is temporarily unavailable.');
+    }
+    const credential = await response.json();
+    const projectId = process.env.MAP_TILES_BILLING_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || 'puviyan-partner-stage';
+    res.set('Cache-Control', 'no-store');
+    res.json({ accessToken: credential.access_token, expiresIn: credential.expires_in, projectId });
+  }));
   router.post('/account/role-requests', wrap(async (req,res) => res.status(201).json(await management.requestRoles(req.context,req.identity,req.body))));
   router.get('/management/organisations', wrap(async (req,res) => res.json(await management.organisations(req.context))));
   router.post('/management/organisations', wrap(async (req,res) => res.status(201).json(await management.saveOrganisation(req.context,null,req.body))));
@@ -91,8 +117,74 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     const ref = projectRef(req.params.id);
     const snapshot = await ref.get();
     const project = snapshot.exists ? snapshot.data() : null;
-    assertProject(req.context, project, write);
-    return { ref, project };
+    if (!project) fail(404, 'Project not found.');
+    const c = req.context;
+    const isOwner = c.superAdmin || c.orgId === project.orgId;
+    const collaborationAccess = c.collaborations?.[project.orgId];
+    let assignedPartner = null;
+    if (!isOwner && !collaborationAccess && c.orgId) {
+      const assignment = await ref.collection('partners').where('partnerOrgId', '==', c.orgId).limit(1).get();
+      assignedPartner = assignment.docs[0]?.data() || null;
+    }
+    if (!isOwner && !collaborationAccess && !assignedPartner) fail(403, 'This organisation is outside your access.');
+    if (c.departmentScoped && isOwner && !c.departmentIds.includes(project.departmentId)) fail(403, 'This project is outside your department access.');
+    if (write) {
+      if (!c.canWrite) fail(403, 'Your approved roles allow viewing only.');
+      if (collaborationAccess && (!c.providerCanWrite || collaborationAccess !== 'write')) fail(403, 'Your approved roles allow viewing only.');
+      if (assignedPartner && assignedPartner.access !== 'write') fail(403, 'This partner has view-only access to the project.');
+    }
+    return { ref, project, assignedPartner, isOwner };
+  }
+  router.get('/projects/:id/report/map', wrap(async (req, res) => {
+    const { project } = await loadProject(req);
+    if (project.scope !== 'water_body_rejuvenation') fail(400, 'Map previews are available for water body project reports.');
+    const apiKey = process.env.GOOGLE_MAPS_STATIC_API_KEY;
+    if (!apiKey) fail(503, 'Google map previews are not configured for reports yet.');
+    const boundary = project.boundary || {};
+    const center = boundary.center || boundary;
+    const lat = Number(center.latitude ?? center.lat);
+    const lng = Number(center.longitude ?? center.lng ?? center.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      fail(422, 'This project does not have a valid map location.');
+    }
+    const params = new URLSearchParams({
+      center: `${lat},${lng}`,
+      zoom: '16',
+      size: '640x360',
+      scale: '2',
+      maptype: 'satellite',
+      markers: `color:green|${lat},${lng}`,
+      key: apiKey,
+    });
+    const upstream = await fetch(`https://maps.googleapis.com/maps/api/staticmap?${params}`, {
+      signal: AbortSignal.timeout(12000),
+    });
+    const contentType = upstream.headers.get('content-type') || '';
+    if (!upstream.ok || !contentType.startsWith('image/')) {
+      logger.error?.('Google Static Maps image request failed', { status: upstream.status, contentType });
+      fail(502, 'Google map preview is temporarily unavailable.');
+    }
+    const image = Buffer.from(await upstream.arrayBuffer());
+    if (!image.length || image.length > 5 * 1024 * 1024) fail(502, 'Google map preview could not be generated.');
+    res.set('Cache-Control', 'private, max-age=3600');
+    res.json({ imageBase64: image.toString('base64'), contentType });
+  }));
+  async function waterOutcomeAccess(req, permission = 'read') {
+    const { ref, project } = await loadProject(req, false);
+    if (project.scope !== 'water_body_rejuvenation') fail(400, 'Outcome tracking is available for water body projects.');
+    const outcomeId = req.params.outcomeId;
+    if (!Array.isArray(project.outcomes) || !project.outcomes.includes(outcomeId)) fail(404, 'This outcome is not selected for the project.');
+    const c = req.context;
+    const isOwner = c.superAdmin || c.orgId === project.orgId;
+    const collaborationAccess = c.collaborations?.[project.orgId];
+    const relations = !isOwner && c.orgId
+      ? (await ref.collection('partners').where('partnerOrgId', '==', c.orgId).limit(20).get()).docs.map(d => d.data())
+      : [];
+    const canEdit = c.canWrite && (isOwner || (collaborationAccess === 'write' && c.providerCanWrite) || relations.some(r => r.partnerType === 'implementation' && r.access === 'write'));
+    const canVerify = c.canWrite && (c.superAdmin || relations.some(r => r.partnerType === 'assurance' || r.role === 'assurance'));
+    if (permission === 'edit' && !canEdit) fail(403, 'Only the action owner or write-enabled implementation partner can update outcome data.');
+    if (permission === 'verify' && !canVerify) fail(403, 'Only an Assurance Partner can verify or flag readings.');
+    return { ref, project, canEdit, canVerify };
   }
   const serialise = snapshot => ({ id: snapshot.id, ...snapshot.data() });
   const sortLatest = list => list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
@@ -140,8 +232,32 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     if (!requestedOrgId && !c.orgId && !c.superAdmin) fail(403, 'An organisation is required.');
     const orgIds = requestedOrgId ? [requestedOrgId] : c.superAdmin ? [] : [c.orgId, ...Object.keys(c.collaborations || {})].filter(Boolean);
     const snapshots = await Promise.all(orgIds.length ? orgIds.map(id => projects.where('orgId', '==', id).limit(500).get()) : [projects.limit(500).get()]);
-    const visible = snapshots.flatMap(s => s.docs.map(serialise)).filter(p => (!c.departmentScoped || c.departmentIds.includes(p.departmentId)) && (!c.collaborations?.[p.orgId] || Object.hasOwn(c.collaborations, p.orgId)));
+    let assignedProjects = [];
+    if (!c.superAdmin && c.orgId && (!requestedOrgId || requestedOrgId === c.orgId)) {
+      const partnerRelations = await db.collectionGroup('partners').where('partnerOrgId', '==', c.orgId).limit(500).get();
+      assignedProjects = await Promise.all(partnerRelations.docs
+        .filter(doc => ['implementation', 'supporting', 'assurance'].includes(doc.data().partnerType))
+        .map(doc => doc.ref.parent.parent)
+        .filter(Boolean)
+        .map(projectRef => projectRef.get()));
+    }
+    const projectDocs = [...snapshots.flatMap(s => s.docs), ...assignedProjects].filter(doc => doc.exists);
+    const deduped = new Map(projectDocs.map(doc => [doc.id, doc]));
+    const visible = [...deduped.values()].map(serialise).filter(p => (!c.departmentScoped || p.orgId !== c.orgId || c.departmentIds.includes(p.departmentId)) && (!c.collaborations?.[p.orgId] || Object.hasOwn(c.collaborations, p.orgId)));
     res.json({ projects: sortLatest(visible) });
+  }));
+  router.get('/project-partners', wrap(async (req, res) => {
+    const type = req.query.type;
+    if (!PARTNER_TYPES.has(type)) fail(400, 'Choose implementation, supporting, assurance or managed service partner type.');
+    const directory = db.collection('partnerDirectory');
+    const [singleType, multipleTypes] = await Promise.all([
+      directory.where('partnerType', '==', type).limit(500).get(),
+      directory.where('partnerTypes', 'array-contains', type).limit(500).get(),
+    ]);
+    const docs = new Map([...singleType.docs, ...multipleTypes.docs].map(doc => [doc.id, doc]));
+    res.json({ partners: [...docs.values()]
+      .filter(doc => !doc.data().status || doc.data().status === 'active')
+      .map(doc => ({ id: doc.id, name: doc.data().name || doc.id, description: doc.data().description || '', partnerType: type, orgId: doc.data().orgId || doc.data().organizationId || null })) });
   }));
   router.post('/projects', wrap(async (req, res) => {
     const c = req.context;
@@ -157,7 +273,21 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       const department = await db.collection('organizations').doc(orgId).collection('departments').doc(departmentId).get();
       if (!department.exists) fail(400, 'Department not found.');
     }
-    if (!['plant_trees', 'prevent_soil_erosion'].includes(req.body.scope)) fail(400, 'Choose a supported project scope.');
+    if (req.body.scope === 'water_body_rejuvenation') {
+      const built = await buildWaterBodyProject(req.body, { db, orgId, uid: c.uid });
+      built.project.actionOwnerOrgName = org.data().name || orgId;
+      built.project.departmentId = departmentId;
+      const ref = await projects.add(built.project);
+      await saveProjectRelations(ref, built.project, built.notificationPartners);
+      if (built.project.status === 'baseline_pending') {
+        await queuePartnerNotifications(db, ref.id, built.project, built.notificationPartners);
+        await inAppNotifications.projectCreated({ projectId: ref.id, project: built.project, orgId }).catch((error) => {
+          logger.warn('Project-created notification could not be queued', { projectId: ref.id, error: error.message });
+        });
+      }
+      return res.status(201).json({ project: { id: ref.id, ...built.project } });
+    }
+    if (req.body.scope !== 'plant_trees') fail(400, 'Choose Plant trees or Water Body Rejuvenation.');
     const projectDate = (value, label) => {
       if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) fail(400, `${label} must be a valid calendar date.`);
       const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -183,12 +313,270 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       ...(boundary ? { boundary } : {}),
     };
     const ref = await projects.add(project);
+    await inAppNotifications.projectCreated({ projectId: ref.id, project, orgId }).catch((error) => {
+      logger.warn('Project-created notification could not be queued', { projectId: ref.id, error: error.message });
+    });
     res.status(201).json({ project: { id: ref.id, ...project } });
+  }));
+  router.patch('/projects/:id', wrap(async (req, res) => {
+    const { ref, project: current } = await loadProject(req, true);
+    if (current.scope !== 'water_body_rejuvenation') fail(400, 'Use the water body project update flow for this project.');
+    const org = await db.collection('organizations').doc(current.orgId).get();
+    if (!org.exists) fail(404, 'Action owner organisation not found.');
+    const built = await buildWaterBodyProject(req.body, { db, orgId: current.orgId, uid: req.context.uid, existing: current });
+    built.project.actionOwnerOrgName = org.data().name || current.orgId;
+    built.project.departmentId = current.departmentId || null;
+    const changedFields = ['name', 'description', 'locationName', 'waterBodyType', 'totalArea', 'boundary', 'implementationPartnerId', 'supportingPartnerIds', 'assurancePartners', 'startDate', 'endDate', 'isCsr', 'csrFinancialYear', 'csrBudget', 'outcomes']
+      .filter(key => JSON.stringify(current[key] ?? null) !== JSON.stringify(built.project[key] ?? null));
+    await ref.set(built.project);
+    if (changedFields.length) await ref.collection('auditLog').add({
+      eventType: 'project.updated', actorUid: req.context.uid, changedFields,
+      before: Object.fromEntries(changedFields.map(key => [key, current[key] ?? null])),
+      after: Object.fromEntries(changedFields.map(key => [key, built.project[key] ?? null])),
+      createdAt: built.project.updatedAt,
+    });
+    await saveProjectRelations(ref, built.project, built.notificationPartners);
+    if (current.status === 'draft' && built.project.status === 'baseline_pending') {
+      await queuePartnerNotifications(db, ref.id, built.project, built.notificationPartners);
+      await inAppNotifications.projectCreated({ projectId: ref.id, project: built.project, orgId: built.project.orgId }).catch((error) => {
+        logger.warn('Project-created notification could not be queued', { projectId: ref.id, error: error.message });
+      });
+    }
+    return res.json({ project: { id: ref.id, ...built.project } });
+  }));
+  router.patch('/projects/:id/status', wrap(async (req, res) => {
+    const { ref, project } = await loadProject(req, true);
+    if (project.scope !== 'water_body_rejuvenation') fail(400, 'Only water body projects use this status flow.');
+    const transitions = {
+      baseline_pending: 'active',
+      active: 'under_assurance',
+      under_assurance: 'completed',
+    };
+    if (project.status === 'draft') fail(400, 'Complete the required project details before creating the project.');
+    if (req.body.status !== transitions[project.status]) {
+      fail(400, 'Project status must move to the next step in the project lifecycle.');
+    }
+    const updatedAt = new Date().toISOString();
+    await ref.update({ status: req.body.status, updatedAt });
+    return res.json({ project: { id: ref.id, ...project, status: req.body.status, updatedAt } });
+  }));
+  router.patch('/projects/:id/outcomes', wrap(async (req, res) => {
+    const { ref, project } = await loadProject(req, true);
+    if (project.scope !== 'water_body_rejuvenation') fail(400, 'Outcomes are available for water body projects.');
+    if (!Array.isArray(req.body.outcomes)) fail(400, 'Supply the project outcome targets.');
+    const selected = new Set(project.outcomes || []);
+    const batch = db.batch();
+    for (const item of req.body.outcomes) {
+      if (!item || typeof item.outcomeId !== 'string' || !selected.has(item.outcomeId)) {
+        fail(400, 'Update only outcomes selected for this project.');
+      }
+      const target = item.target == null || item.target === '' ? null : Number(item.target);
+      if (target != null && (!Number.isFinite(target) || target < 0)) fail(400, 'Outcome targets must be zero or a positive number.');
+      const targetUnit = item.targetUnit == null || item.targetUnit === '' ? null : text(item.targetUnit, 'Target unit', 30);
+      batch.set(ref.collection('outcomes').doc(item.outcomeId), {
+        projectId: ref.id,
+        outcomeId: item.outcomeId,
+        target,
+        targetUnit,
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+    }
+    await batch.commit();
+    const results = await ref.collection('outcomes').get();
+    return res.json({ outcomes: results.docs.map(serialise) });
+  }));
+  router.get('/water-body/masters', wrap(async (req, res) => res.json(await waterOutcomeMasters.masters(db))));
+  router.put('/water-body/masters', wrap(async (req, res) => {
+    if (!req.context.superAdmin) fail(403, 'Super admin access is required to edit water-body masters.');
+    const { metrics, actions, outcomeNames } = req.body || {};
+    if (!Array.isArray(metrics) || !Array.isArray(actions) || !outcomeNames || typeof outcomeNames !== 'object') fail(400, 'Supply metrics, actions and outcome names.');
+    await db.collection('waterBodyMasters').doc('default').set({ metrics, actions, outcomeNames, updatedAt: new Date().toISOString(), updatedBy: req.context.uid });
+    return res.json({ status: 'saved' });
+  }));
+  router.get('/projects/:id/outcomes/:outcomeId', wrap(async (req, res) => {
+    const { ref, project, canEdit, canVerify } = await waterOutcomeAccess(req, 'read');
+    const master = await waterOutcomeMasters.masters(db);
+    const outcomeRef = ref.collection('outcomes').doc(req.params.outcomeId);
+    const outcomeSnapshot = await outcomeRef.get();
+    const outcome = outcomeSnapshot.exists ? outcomeSnapshot.data() : {};
+    const metricDefinitions = master.metrics.filter(m => m.outcomeId === req.params.outcomeId);
+    const defaults = metricDefinitions.filter(m => m.isDefault && !m.autoCalculated).map(m => m.id);
+    const selectedMetrics = [...new Set([...(outcome.selectedMetrics || defaults), ...defaults])];
+    const [before, targets, readings, actionSnapshot] = await Promise.all([
+      outcomeRef.collection('before').get(), outcomeRef.collection('targets').get(),
+      outcomeRef.collection('readings').orderBy('date', 'desc').limit(500).get(), ref.collection('actions').limit(500).get(),
+    ]);
+    const signed = async doc => {
+      const value = { id: doc.id, ...doc.data() };
+      if (value.evidenceStoragePath) {
+        const [url] = await getBucket().file(value.evidenceStoragePath).getSignedUrl({ action: 'read', expires: Date.now() + 15 * 60 * 1000 });
+        value.evidenceUrl = url;
+      }
+      return value;
+    };
+    return res.json({
+      projectId: ref.id, outcomeId: req.params.outcomeId,
+      outcomeName: master.outcomeNames[req.params.outcomeId] || req.params.outcomeId,
+      selectedOutcomes: project.outcomes || [], selectedMetrics, metrics: metricDefinitions,
+      actionsCatalog: master.actions.filter(a => (a.outcomeIds || []).includes(req.params.outcomeId)),
+      before: await Promise.all(before.docs.map(signed)),
+      baselineCorrections: await Promise.all(before.docs.map(async doc => ({ metricId: doc.id, records: await Promise.all((await doc.ref.collection('corrections').orderBy('createdAt', 'desc').limit(100).get()).docs.map(signed)) }))),
+      targets: targets.docs.map(serialise),
+      readings: await Promise.all(readings.docs.map(signed)),
+      actions: actionSnapshot.docs.map(serialise).filter(a => (a.outcomeIds || []).includes(req.params.outcomeId)),
+      canEdit, canVerify,
+    });
+  }));
+  router.put('/projects/:id/outcomes/:outcomeId/metrics', wrap(async (req, res) => {
+    const { ref } = await waterOutcomeAccess(req, 'edit');
+    const master = await waterOutcomeMasters.masters(db);
+    if (!Array.isArray(req.body.metricIds)) fail(400, 'Choose one or more project metrics.');
+    const definitions = master.metrics.filter(m => m.outcomeId === req.params.outcomeId);
+    const defaults = definitions.filter(m => m.isDefault && !m.autoCalculated).map(m => m.id);
+    const selectedMetrics = [...new Set([...defaults, ...req.body.metricIds])];
+    if (selectedMetrics.some(id => !definitions.some(m => m.id === id && !m.autoCalculated))) fail(400, 'Choose metrics available for this outcome.');
+    const outcomeRef = ref.collection('outcomes').doc(req.params.outcomeId);
+    const previous = await outcomeRef.get();
+    const stamp = new Date().toISOString();
+    await outcomeRef.set({ outcomeId: req.params.outcomeId, projectId: ref.id, selectedMetrics, updatedAt: stamp }, { merge: true });
+    await ref.collection('auditLog').add({ eventType: 'outcome.metrics.updated', actorUid: req.context.uid, outcomeId: req.params.outcomeId, before: previous.data()?.selectedMetrics || defaults, after: selectedMetrics, createdAt: stamp });
+    return res.json({ selectedMetrics });
+  }));
+  router.put('/projects/:id/outcomes/:outcomeId/before/:metricId', wrap(async (req, res) => {
+    const { ref } = await waterOutcomeAccess(req, 'edit');
+    const master = await waterOutcomeMasters.masters(db);
+    const metric = waterOutcomeMasters.findMetric(master, req.params.outcomeId, req.params.metricId);
+    if (!metric || metric.autoCalculated) fail(400, 'Choose an editable metric for this outcome.');
+    const value = waterOutcomeMasters.numberValue(req.body.value, 'Baseline value');
+    if (req.body.unit !== metric.unit) fail(400, `Use the fixed unit ${metric.unit} for ${metric.name}.`);
+    const date = validDate(req.body.date, 'Baseline date').slice(0, 10);
+    const evidence = text(req.body.evidence, 'Evidence', 2000);
+    const quality = req.params.outcomeId === 'improved_water_quality';
+    const testedBy = quality ? text(req.body.testedBy, 'Lab or agency', 160) : null;
+    const nablAccredited = quality ? req.body.nablAccredited : null;
+    if (quality && typeof nablAccredited !== 'boolean') fail(400, 'Choose whether the lab or agency is NABL accredited.');
+    const recordRef = ref.collection('outcomes').doc(req.params.outcomeId).collection('before').doc(req.params.metricId);
+    const previous = await recordRef.get();
+    const stamp = new Date().toISOString();
+    const previousData = previous.exists ? previous.data() : null;
+    const isCorrection = previousData?.verificationStatus === 'verified';
+    if (isCorrection) {
+      await recordRef.collection('corrections').add({ ...previousData, replacedAt: stamp, replacedByUid: req.context.uid, correctionReason: text(req.body.correctionReason, 'Correction reason', 300) });
+    }
+    const data = { projectId: ref.id, outcomeId: req.params.outcomeId, metricId: metric.id, metricName: metric.name, value, unit: metric.unit, date, evidence, testedBy, nablAccredited, verificationStatus: 'pending', createdBy: req.context.uid, createdAt: stamp, updatedAt: stamp, ...(isCorrection ? { correctionOfVerifiedBaseline: true, correctionReason: text(req.body.correctionReason, 'Correction reason', 300) } : {}) };
+    await recordRef.set(data);
+    await ref.collection('auditLog').add({ eventType: isCorrection ? 'outcome.baseline.corrected' : 'outcome.baseline.saved', actorUid: req.context.uid, outcomeId: req.params.outcomeId, metricId: metric.id, before: previousData, after: data, createdAt: stamp });
+    return res.json({ baseline: { id: recordRef.id, ...data }, correction: isCorrection });
+  }));
+  router.put('/projects/:id/outcomes/:outcomeId/targets/:metricId', wrap(async (req, res) => {
+    const { ref } = await waterOutcomeAccess(req, 'edit');
+    const master = await waterOutcomeMasters.masters(db);
+    const metric = waterOutcomeMasters.findMetric(master, req.params.outcomeId, req.params.metricId);
+    if (!metric || metric.autoCalculated) fail(400, 'Choose an editable metric for this outcome.');
+    const outcomeRef = ref.collection('outcomes').doc(req.params.outcomeId);
+    if (!(await outcomeRef.collection('before').doc(req.params.metricId).get()).exists) fail(409, 'Add the baseline reading before setting a target.');
+    const value = waterOutcomeMasters.numberValue(req.body.value, 'Target value');
+    const targetDate = validDate(req.body.targetDate, 'Target date').slice(0, 10);
+    const stamp = new Date().toISOString();
+    const targetRef = outcomeRef.collection('targets').doc(metric.id);
+    const previous = await targetRef.get();
+    const data = { projectId: ref.id, outcomeId: req.params.outcomeId, metricId: metric.id, metricName: metric.name, value, unit: metric.unit, targetDate, updatedBy: req.context.uid, updatedAt: stamp };
+    await targetRef.set(data);
+    await ref.collection('auditLog').add({ eventType: 'outcome.target.saved', actorUid: req.context.uid, outcomeId: req.params.outcomeId, metricId: metric.id, before: previous.exists ? previous.data() : null, after: data, createdAt: stamp });
+    return res.json({ target: data });
+  }));
+  router.post('/projects/:id/outcomes/:outcomeId/readings', wrap(async (req, res) => {
+    const { ref } = await waterOutcomeAccess(req, 'edit');
+    const master = await waterOutcomeMasters.masters(db);
+    const metric = waterOutcomeMasters.findMetric(master, req.params.outcomeId, req.body.metricId);
+    if (!metric || metric.autoCalculated) fail(400, 'Choose an editable metric for this outcome.');
+    const outcomeRef = ref.collection('outcomes').doc(req.params.outcomeId);
+    if (!(await outcomeRef.collection('before').doc(metric.id).get()).exists) fail(409, 'Add a baseline before recording an after reading.');
+    const value = waterOutcomeMasters.numberValue(req.body.value, 'Reading value');
+    if (req.body.unit !== metric.unit) fail(400, `Use the fixed unit ${metric.unit} for ${metric.name}.`);
+    const date = validDate(req.body.date, 'Reading date').slice(0, 10);
+    const evidence = text(req.body.evidence, 'Evidence', 2000);
+    const quality = req.params.outcomeId === 'improved_water_quality';
+    const testedBy = quality ? text(req.body.testedBy, 'Lab or agency', 160) : null;
+    const nablAccredited = quality ? req.body.nablAccredited : null;
+    if (quality && typeof nablAccredited !== 'boolean') fail(400, 'Choose whether the lab or agency is NABL accredited.');
+    const takenAfterActionId = req.body.takenAfterActionId || null;
+    if (takenAfterActionId) {
+      const action = await ref.collection('actions').doc(takenAfterActionId).get();
+      if (!action.exists || !(action.data().outcomeIds || []).includes(req.params.outcomeId)) fail(400, 'Choose an action linked to this outcome.');
+    }
+    const stamp = new Date().toISOString();
+    const recordRef = outcomeRef.collection('readings').doc();
+    const data = { projectId: ref.id, outcomeId: req.params.outcomeId, metricId: metric.id, metricName: metric.name, value, unit: metric.unit, date, evidence, testedBy, nablAccredited, takenAfterActionId, verificationStatus: 'pending', createdBy: req.context.uid, createdAt: stamp };
+    await recordRef.set(data);
+    await ref.collection('auditLog').add({ eventType: 'outcome.after.saved', actorUid: req.context.uid, outcomeId: req.params.outcomeId, metricId: metric.id, recordId: recordRef.id, after: data, createdAt: stamp });
+    return res.status(201).json({ reading: { id: recordRef.id, ...data } });
+  }));
+  router.post('/projects/:id/actions', wrap(async (req, res) => {
+    const { ref, project } = await loadProject(req, true);
+    if (project.scope !== 'water_body_rejuvenation') fail(400, 'Actions are available for water body projects.');
+    const master = await waterOutcomeMasters.masters(db);
+    const definition = master.actions.find(a => a.id === req.body.catalogId);
+    if (!definition) fail(400, 'Choose an action from the project action list.');
+    const outcomeIds = [...new Set(req.body.outcomeIds || [])];
+    if (!outcomeIds.length || outcomeIds.some(id => !(definition.outcomeIds || []).includes(id) || !(project.outcomes || []).includes(id))) fail(400, 'Link the action to eligible selected outcomes.');
+    const quantity = waterOutcomeMasters.numberValue(req.body.quantity, 'Output quantity');
+    const quantityUnit = text(req.body.quantityUnit, 'Output unit', 40);
+    const evidence = text(req.body.evidence, 'Action evidence', 2000);
+    const stamp = new Date().toISOString();
+    const recordRef = ref.collection('actions').doc();
+    const data = { projectId: ref.id, catalogId: definition.id, name: definition.name, outcomeIds, quantity, quantityUnit, evidence, createdBy: req.context.uid, createdAt: stamp, updatedAt: stamp };
+    await recordRef.set(data);
+    await ref.collection('auditLog').add({ eventType: 'outcome.action.added', actorUid: req.context.uid, actionId: recordRef.id, after: data, outcomeIds, createdAt: stamp });
+    return res.status(201).json({ action: { id: recordRef.id, ...data } });
+  }));
+  async function verifyWaterReading(req, res, kind) {
+    const { ref } = await waterOutcomeAccess(req, 'verify');
+    const outcomeRef = ref.collection('outcomes').doc(req.params.outcomeId);
+    const recordRef = kind === 'baseline' ? outcomeRef.collection('before').doc(req.params.metricId) : outcomeRef.collection('readings').doc(req.params.readingId);
+    const snapshot = await recordRef.get();
+    if (!snapshot.exists) fail(404, 'Reading not found.');
+    const status = req.body.verificationStatus;
+    if (!['verified', 'flagged'].includes(status)) fail(400, 'Choose Verified or Flagged.');
+    if (snapshot.data().verificationStatus === 'verified' && status !== 'verified') fail(409, 'A verified reading cannot be changed.');
+    const verifierOrg = req.context.orgId ? await db.collection('organizations').doc(req.context.orgId).get() : null;
+    const verifierName = req.context.superAdmin ? 'Puviyan Super Admin' : verifierOrg?.data()?.name || req.identity.email || 'Assurance Partner';
+    const stamp = new Date().toISOString();
+    const verification = { verificationStatus: status, verifiedByOrgId: req.context.orgId || null, verifiedByName: verifierName, verifiedByUid: req.context.uid, verifiedAt: stamp, verificationNote: (req.body.note || '').toString().trim().slice(0, 500) };
+    await recordRef.update(verification);
+    await ref.collection('auditLog').add({ eventType: `outcome.${kind}.${status}`, actorUid: req.context.uid, outcomeId: req.params.outcomeId, metricId: req.params.metricId || snapshot.data().metricId, recordId: recordRef.id, before: snapshot.data(), after: { ...snapshot.data(), ...verification }, createdAt: stamp });
+    return res.json({ verificationStatus: status, verifiedByName: verifierName, verifiedAt: stamp });
+  }
+  router.patch('/projects/:id/outcomes/:outcomeId/before/:metricId/verification', wrap(async (req, res) => verifyWaterReading(req, res, 'baseline')));
+  router.patch('/projects/:id/outcomes/:outcomeId/readings/:readingId/verification', wrap(async (req, res) => verifyWaterReading(req, res, 'reading')));
+  router.get('/project-notifications', wrap(async (req, res) => {
+    const orgId = req.context.orgId;
+    if (!orgId) return res.json({ notifications: [] });
+    await inAppNotifications.materializeDueGrowthReminders(orgId);
+    const [directoryByOrg, directoryByOrganization] = await Promise.all([
+      db.collection('partnerDirectory').where('orgId', '==', orgId).limit(100).get(),
+      db.collection('partnerDirectory').where('organizationId', '==', orgId).limit(100).get(),
+    ]);
+    const partners = [...new Set([...directoryByOrg.docs, ...directoryByOrganization.docs].map(doc => doc.id))];
+    const queries = [db.collection('partnerProjectNotifications').where('recipientOrgId', '==', orgId).limit(200).get()];
+    for (let index = 0; index < partners.length; index += 30) {
+      queries.push(db.collection('partnerProjectNotifications').where('partnerId', 'in', partners.slice(index, index + 30)).limit(200).get());
+    }
+    const snapshots = await Promise.all(queries);
+    const notifications = new Map();
+    for (const snapshot of snapshots) for (const doc of snapshot.docs) notifications.set(doc.id, serialise(doc));
+    res.json({ notifications: sortLatest([...notifications.values()]) });
   }));
   router.get('/projects/:id', wrap(async (req, res) => {
     const { ref, project } = await loadProject(req);
-    const [events, trees] = await Promise.all([ref.collection('events').limit(500).get(), ref.collection('trees').limit(500).get()]);
-    const impact = await carbonImpact.calculateProject(ref.id, project);
+    const isWaterBody = project.scope === 'water_body_rejuvenation';
+    const [events, trees, outcomes, partners, impact] = await Promise.all([
+      isWaterBody ? Promise.resolve({ docs: [] }) : ref.collection('events').limit(500).get(),
+      isWaterBody ? Promise.resolve({ docs: [] }) : ref.collection('trees').limit(500).get(),
+      ref.collection('outcomes').limit(100).get(),
+      ref.collection('partners').limit(100).get(),
+      isWaterBody ? Promise.resolve(null) : carbonImpact.calculateProject(ref.id, project),
+    ]);
     const records = await Promise.all(trees.docs.map(async doc => {
       const { storagePath, contextStoragePath, fingerprint, imageHashes, perceptualHash, contextPerceptualHash, captureSessionId, ...record } = doc.data();
       // Only authenticated, scoped reads mint short-lived URLs; the bucket stays private.
@@ -197,7 +585,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       if (contextStoragePath) [result.contextPhotoUrl] = await getBucket().file(contextStoragePath).getSignedUrl({ action: 'read', expires: Date.now() + 15 * 60 * 1000 });
       return result;
     }));
-    res.json({ project: { id: ref.id, ...project, carbonImpact: impact?.summary || null }, events: sortLatest(events.docs.map(serialise)), trees: sortLatest(records) });
+    res.json({ project: { id: ref.id, ...project, outcomeDetails: outcomes.docs.map(serialise), projectPartners: partners.docs.map(serialise), carbonImpact: impact?.summary || null }, events: sortLatest(events.docs.map(serialise)), trees: sortLatest(records) });
   }));
   router.post('/projects/:id/events', wrap(async (req, res) => {
     const { ref, project } = await loadProject(req, true);

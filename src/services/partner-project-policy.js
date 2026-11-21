@@ -51,7 +51,21 @@ function projectBoundary(input) {
   if (!Number.isInteger(radiusMeters) || radiusMeters < 50 || radiusMeters > 10000) {
     fail(400, 'Project boundary radius must be between 50 and 10,000 metres.');
   }
-  return { center: { latitude, longitude }, radiusMeters };
+  let vertices;
+  if (input.vertices != null) {
+    if (!Array.isArray(input.vertices) || input.vertices.length < 3 || input.vertices.length > 200) {
+      fail(400, 'Draw a project boundary with 3 to 200 points.');
+    }
+    vertices = input.vertices.map(point => {
+      const lat = point?.latitude, lng = point?.longitude;
+      if (typeof lat !== 'number' || !Number.isFinite(lat) || lat < -90 || lat > 90 ||
+          typeof lng !== 'number' || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+        fail(400, 'The project boundary contains an invalid map coordinate.');
+      }
+      return { latitude: lat, longitude: lng };
+    });
+  }
+  return { center: { latitude, longitude }, radiusMeters, ...(vertices ? { vertices } : {}) };
 }
 function assertProjectBoundary(project, point) {
   const boundary = project?.boundary;
@@ -62,6 +76,21 @@ function assertProjectBoundary(project, point) {
     fail(409, 'This project has an invalid boundary. Ask an organisation owner to update it.');
   }
   const radians = Math.PI / 180, earthRadiusMeters = 6371008.8;
+  if (Array.isArray(boundary.vertices) && boundary.vertices.length >= 3) {
+    const x = point.longitude, y = point.latitude;
+    let inside = false;
+    for (let i = 0, j = boundary.vertices.length - 1; i < boundary.vertices.length; j = i++) {
+      const a = boundary.vertices[i], b = boundary.vertices[j];
+      const cross = (x - a.longitude) * (b.latitude - a.latitude) - (y - a.latitude) * (b.longitude - a.longitude);
+      if (Math.abs(cross) < 1e-8 && x >= Math.min(a.longitude, b.longitude) - 1e-8 && x <= Math.max(a.longitude, b.longitude) + 1e-8 &&
+          y >= Math.min(a.latitude, b.latitude) - 1e-8 && y <= Math.max(a.latitude, b.latitude) + 1e-8) return;
+      const crosses = (a.latitude > y) !== (b.latitude > y) &&
+        x < (b.longitude - a.longitude) * (y - a.latitude) / (b.latitude - a.latitude) + a.longitude;
+      if (crosses) inside = !inside;
+    }
+    if (!inside) fail(400, 'This planting location is outside the drawn project boundary. Choose a point inside the mapped area.');
+    return;
+  }
   const lat1 = latitude * radians, lat2 = point.latitude * radians;
   const dLat = (point.latitude - latitude) * radians, dLon = (point.longitude - longitude) * radians;
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
