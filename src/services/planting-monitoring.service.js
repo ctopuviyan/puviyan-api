@@ -34,6 +34,24 @@ function createPlantingMonitoring({
     sessions = db.collection("partnerCaptureSessions");
   const stamp = () => now().toISOString();
   const locationId = (projectId, treeId) => `${projectId}_${treeId}`;
+  function rejectUnclearPlantPhoto(assessment) {
+    if (assessment?.status !== "completed") return;
+    const flags = new Set(assessment.flags || []);
+    const unclear =
+      assessment.visiblePlant !== true ||
+      assessment.imageQuality !== "good" ||
+      [
+        "plant_not_clearly_visible",
+        "image_quality_unclear",
+        "needs_human_review",
+        "selected_target_unclear",
+      ].some((flag) => flags.has(flag));
+    if (unclear)
+      fail(
+        422,
+        "Gemini could not clearly confirm a plant in this photo. Take a closer, well-lit photo with the plant clearly visible, then submit again.",
+      );
+  }
   async function actor(tx, context, projectRef, write = false, review = false) {
     const [user, project] = await Promise.all([
       tx.get(db.collection("partnerUsers").doc(context.uid)),
@@ -385,7 +403,6 @@ function createPlantingMonitoring({
       );
       const initial = await projectRef.get();
       assertProject(context, initial.exists ? initial.data() : null, true);
-      assertProjectBoundary(initial.data(), data);
       if (initial.data().scope !== "plant_trees")
         fail(400, "Choose a Plant Trees project.");
       const assessmentBaseline = {
@@ -401,16 +418,7 @@ function createPlantingMonitoring({
         photos,
         assessmentBaseline,
       );
-      if (
-        assessmentBaseline.stage !== "sown" &&
-        assessmentBaseline.stage !== "not_germinated" &&
-        assessment?.status === "completed" &&
-        assessment.visiblePlant === false
-      )
-        fail(
-          422,
-          "The photo does not clearly show a plant. Take one clear photo of the seedling or tree and try again.",
-        );
+      rejectUnclearPlantPhoto(assessment);
       const pointId = locationId(projectId, ref.id);
       const result = await storePhotos(
         initial.data(),
@@ -422,7 +430,7 @@ function createPlantingMonitoring({
           db.runTransaction(async (tx) => {
             const { project } = await actor(tx, context, projectRef, true),
               existing = await tx.get(ref);
-            assertProjectBoundary(project, data);
+            const boundaryStatus = assertProjectBoundary(project, data);
             if (existing.exists) {
               if (
                 existing.data().createdByUid !== context.uid ||
@@ -450,6 +458,27 @@ function createPlantingMonitoring({
             }
             await checkedPhotoHashes(tx, photos);
             const flags = [];
+            const validationRemarks = [...data.validationRemarks];
+            if (data.accuracyMeters > 20) flags.push("gps_accuracy_over_20m");
+            if (data.locationSource === "map_corrected")
+              flags.push("phone_gps_unavailable_project_pin_used");
+            if (data.vegetationCoveragePercent != null && data.vegetationCoveragePercent < 80)
+              flags.push("low_vegetation_coverage");
+            if (boundaryStatus === "outside") {
+              flags.push("outside_project_boundary");
+              validationRemarks.push("location_outside_project_boundary");
+            } else if (boundaryStatus === "unavailable") {
+              flags.push("project_boundary_unavailable");
+              validationRemarks.push("project_boundary_unavailable");
+            }
+            if (assessment?.visiblePlant === false) {
+              flags.push("ai_plant_not_confirmed");
+              validationRemarks.push("ai_did_not_confirm_plant");
+            }
+            if (assessment?.status !== "completed") {
+              flags.push("ai_validation_unavailable");
+              validationRemarks.push("ai_validation_unavailable");
+            }
             if (session.legacy) flags.push("legacy_capture_without_session");
             if (data.photoSource !== "camera")
               flags.push("gallery_capture_unverified");
@@ -486,6 +515,7 @@ function createPlantingMonitoring({
                   ? "awaiting_germination"
                   : "awaiting_review",
               latestObservationAt: data.capturedAt,
+              validationRemarks,
               observationCount: 1,
               nextCheckDueAt: dueAt(data.capturedAt, data.intervalDays),
               growthReminderDueAt: addUtcMonths(data.capturedAt),
@@ -504,6 +534,7 @@ function createPlantingMonitoring({
               imageHashes: photos.map((p) => p.sha256),
               perceptualHash: photos[0].perceptualHash,
               flags,
+              validationRemarks,
               reviewStatus: "pending",
               revision: 1,
               aiAssessment: { status: "not_configured" },
@@ -616,7 +647,6 @@ function createPlantingMonitoring({
       );
       const p = await projectRef.get();
       assertProject(context, p.exists ? p.data() : null, true);
-      assertProjectBoundary(p.data(), data);
       const assessmentBaseline = {
         kind: initial.data().kind || "tree",
         stage: data.stage,
@@ -631,6 +661,7 @@ function createPlantingMonitoring({
         photos,
         assessmentBaseline,
       );
+      rejectUnclearPlantPhoto(assessment);
       const latestFamily = assessment?.familySuggestions?.[0];
       const registeredFamily = initial.data().plantFamily;
       if (latestFamily && registeredFamily) {
@@ -643,17 +674,6 @@ function createPlantingMonitoring({
           ];
         }
       }
-      if (
-        !["sown", "not_germinated", "dead", "missing"].includes(
-          assessmentBaseline.stage,
-        ) &&
-        assessment?.status === "completed" &&
-        assessment.visiblePlant === false
-      )
-        fail(
-          422,
-          "The photo does not clearly show a plant. Take one clear photo of the seedling or tree and try again.",
-        );
       const result = await storePhotos(
         p.data(),
         projectId,
@@ -663,7 +683,7 @@ function createPlantingMonitoring({
         async (paths) =>
           db.runTransaction(async (tx) => {
             const { project } = await actor(tx, context, projectRef, true);
-            assertProjectBoundary(project, data);
+            const boundaryStatus = assertProjectBoundary(project, data);
             const [current, existing] = await Promise.all([
               tx.get(ref),
               tx.get(obsRef),
@@ -697,13 +717,29 @@ function createPlantingMonitoring({
                 "A growth observation must be newer than the existing photos.",
               );
             const displacement = distance(data, tree);
-            if (displacement > 25)
-              fail(
-                409,
-                "Move to the registered planting location before adding ground evidence.",
-              );
             await checkedPhotoHashes(tx, photos);
             const flags = [];
+            const validationRemarks = [...data.validationRemarks];
+            if (data.accuracyMeters > 20) flags.push("gps_accuracy_over_20m");
+            if (data.locationSource === "map_corrected")
+              flags.push("phone_gps_unavailable_project_pin_used");
+            if (data.vegetationCoveragePercent != null && data.vegetationCoveragePercent < 80)
+              flags.push("low_vegetation_coverage");
+            if (boundaryStatus === "outside") {
+              flags.push("outside_project_boundary");
+              validationRemarks.push("location_outside_project_boundary");
+            } else if (boundaryStatus === "unavailable") {
+              flags.push("project_boundary_unavailable");
+              validationRemarks.push("project_boundary_unavailable");
+            }
+            if (assessment?.visiblePlant === false) {
+              flags.push("ai_plant_not_confirmed");
+              validationRemarks.push("ai_did_not_confirm_plant");
+            }
+            if (assessment?.status !== "completed") {
+              flags.push("ai_validation_unavailable");
+              validationRemarks.push("ai_validation_unavailable");
+            }
             const plantedCount = tree.kind === "seed_spot"
               ? Number(tree.seedCount || 0)
               : 1;
@@ -713,6 +749,8 @@ function createPlantingMonitoring({
               flags.push("gallery_capture_unverified");
             if (data.vegetationCoverageOverride)
               flags.push("low_vegetation_coverage_override");
+            if (displacement > 25)
+              flags.push("location_displacement_over_25m");
             if (displacement > 5 || data.accuracyMeters > 5)
               flags.push("location_match_uncertain");
             if (similar(photos[0].perceptualHash, tree.perceptualHash))
@@ -731,6 +769,7 @@ function createPlantingMonitoring({
               imageHashes: photos.map((p) => p.sha256),
               perceptualHash: photos[0].perceptualHash,
               flags,
+              validationRemarks,
               reviewStatus: "pending",
               revision: 1,
               aiAssessment: { status: "not_configured" },

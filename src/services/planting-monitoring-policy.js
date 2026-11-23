@@ -62,7 +62,7 @@ function captureMetadata(
       input.accuracyMeters,
       "GPS accuracy",
       0,
-      legacy ? 100 : 20,
+      20000000,
     ),
     // Clients predating source tagging retain the legacy duplicate policy.
     locationSource: input.locationSource || "legacy_unverified",
@@ -93,6 +93,16 @@ function captureMetadata(
     input.vegetationCoverageOverride === true &&
     data.vegetationCoveragePercent != null &&
     data.vegetationCoveragePercent < 80;
+  data.validationRemarks = [
+    ...(data.accuracyMeters > 20 ? ["gps_accuracy_over_20m"] : []),
+    ...(data.locationSource === "map_corrected"
+      ? ["phone_gps_unavailable_project_pin_used"]
+      : []),
+    ...(data.vegetationCoveragePercent != null &&
+    data.vegetationCoveragePercent < 80
+      ? ["vegetation_coverage_below_80_percent"]
+      : []),
+  ];
   if (input.selectedTargetPoint != null) {
     const point = input.selectedTargetPoint;
     if (
@@ -166,6 +176,13 @@ function captureMetadata(
     data.kind = input.kind || "tree";
     if (!KINDS.includes(data.kind))
       fail(400, "Choose seed planting spot, sapling or tree.");
+    if (data.kind === "tree" && input.plantingDate == null && !legacy)
+      fail(400, "Select the date this established tree was planted.");
+    data.plantingDate = input.plantingDate == null
+      ? data.capturedAt
+      : validDate(input.plantingDate, "Planting date");
+    if (Date.parse(data.plantingDate) > now + 5 * 60000)
+      fail(400, "Planting date cannot be in the future.");
     data.species =
       input.species == null || input.species === ""
         ? null

@@ -309,4 +309,5 @@ module.exports = {
   buildWaterBodyProject,
   queuePartnerNotifications,
   saveProjectRelations,
+  selectedPartner,
 };

@@ -12,9 +12,9 @@ const { requirePasswordIdentity } = require('../services/sustainability-accounts
 const { createPlantingMonitoring } = require('../services/planting-monitoring.service');
 const { createPlantingPhotoAssessor } = require('../services/planting-photo-assessment.service');
 const { createProjectVegetation } = require('../services/project-vegetation.service');
-const { createPiaTreeCarbonImpact } = require('../services/pia-tree-carbon-impact.service');
+const { createPiaTreeCarbonImpact, FACTORS } = require('../services/pia-tree-carbon-impact.service');
 const { createInAppProjectNotifications } = require('../services/in-app-project-notifications.service');
-const { PARTNER_TYPES, buildWaterBodyProject, queuePartnerNotifications, saveProjectRelations } = require('../services/water-body-project');
+const { ASSURANCE_ROLES, PARTNER_TYPES, buildWaterBodyProject, queuePartnerNotifications, saveProjectRelations, selectedPartner } = require('../services/water-body-project');
 const waterOutcomeMasters = require('../services/water-body-outcomes');
 const { geohashForLocation } = require('geofire-common');
 
@@ -48,9 +48,12 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
         const org = await db.collection('organizations').doc(membership.data().orgId).get();
         if (!org.exists || org.data().status !== 'active') fail(403,'The organisation is inactive.');
         const isProjectPartnerLookup = req.path === '/project-partners' && req.method === 'GET';
+        const isProjectNotifications = req.path === '/project-notifications' && req.method === 'GET';
+        const isTreeSpecies = req.path === '/tree-species' && req.method === 'GET';
         const isWaterBodyMasterRead = req.path === '/water-body/masters' && req.method === 'GET';
         const isMapTilesToken = req.path === '/maps/tiles/token' && req.method === 'GET';
-        if ((!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) && !isProjectPartnerLookup && !isWaterBodyMasterRead && !isMapTilesToken) || (req.path === '/account' && req.method !== 'GET')) fail(403,'Use the sustainability v2 account and member APIs.');
+        const isMapPreview = /^\/projects\/[^/]+\/report\/map$/.test(req.path) && req.method === 'GET';
+        if ((!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) && !isProjectPartnerLookup && !isProjectNotifications && !isTreeSpecies && !isWaterBodyMasterRead && !isMapTilesToken && !isMapPreview) || (req.path === '/account' && req.method !== 'GET')) fail(403,'Use the sustainability v2 account and member APIs.');
         if (req.method === 'POST' && /\/trees$/.test(req.path)) fail(410,'Update the app to submit planting evidence with a capture session.');
       }
       next();
@@ -137,9 +140,8 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   }
   router.get('/projects/:id/report/map', wrap(async (req, res) => {
     const { project } = await loadProject(req);
-    if (project.scope !== 'water_body_rejuvenation') fail(400, 'Map previews are available for water body project reports.');
     const apiKey = process.env.GOOGLE_MAPS_STATIC_API_KEY;
-    if (!apiKey) fail(503, 'Google map previews are not configured for reports yet.');
+    if (!apiKey) fail(503, 'Google map previews are not configured yet.');
     const boundary = project.boundary || {};
     const center = boundary.center || boundary;
     const lat = Number(center.latitude ?? center.lat);
@@ -148,14 +150,67 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       fail(422, 'This project does not have a valid map location.');
     }
     const params = new URLSearchParams({
-      center: `${lat},${lng}`,
-      zoom: '16',
       size: '640x360',
       scale: '2',
       maptype: 'satellite',
       markers: `color:green|${lat},${lng}`,
       key: apiKey,
     });
+    const vertices = boundary.vertices;
+    if (Array.isArray(vertices) && vertices.length >= 3) {
+      const encodeValue = value => {
+        let encoded = value < 0 ? ~(value << 1) : value << 1;
+        let result = '';
+        while (encoded >= 0x20) {
+          result += String.fromCharCode((0x20 | (encoded & 0x1f)) + 63);
+          encoded >>= 5;
+        }
+        return result + String.fromCharCode(encoded + 63);
+      };
+      let previousLat = 0, previousLng = 0;
+      let path = '';
+      for (const point of vertices) {
+        const pointLat = Math.round(point.latitude * 1e5);
+        const pointLng = Math.round(point.longitude * 1e5);
+        path += encodeValue(pointLat - previousLat) + encodeValue(pointLng - previousLng);
+        previousLat = pointLat;
+        previousLng = pointLng;
+      }
+      const first = vertices[0];
+      path += encodeValue(Math.round(first.latitude * 1e5) - previousLat) +
+        encodeValue(Math.round(first.longitude * 1e5) - previousLng);
+      params.set('path', `fillcolor:0x39BE5740|color:0x39BE57FF|weight:3|enc:${path}`);
+      // Frame the drawn polygon itself. The stored project pin may be several
+      // kilometres away and must not pull the preview out to a broader area.
+      const latitudes = vertices.map(point => Number(point.latitude)).filter(Number.isFinite);
+      const longitudes = vertices.map(point => Number(point.longitude)).filter(Number.isFinite);
+      if (latitudes.length >= 3 && longitudes.length >= 3) {
+        const south = Math.min(...latitudes);
+        const north = Math.max(...latitudes);
+        const west = Math.min(...longitudes);
+        const east = Math.max(...longitudes);
+        const mapLat = (south + north) / 2;
+        const mapLng = (west + east) / 2;
+        const latitudeSpanMeters = Math.max(1, (north - south) * 111320);
+        const longitudeSpanMeters = Math.max(
+          1,
+          (east - west) * 111320 * Math.cos(mapLat * Math.PI / 180),
+        );
+        const metersPerPixel = Math.max(
+          latitudeSpanMeters / (360 * 0.78),
+          longitudeSpanMeters / (640 * 0.78),
+        );
+        const zoom = Math.max(
+          2,
+          Math.min(20, Math.floor(Math.log2(156543.03392 * Math.cos(mapLat * Math.PI / 180) / metersPerPixel))),
+        );
+        params.set('center', `${mapLat},${mapLng}`);
+        params.set('zoom', String(zoom));
+      }
+    } else {
+      params.set('center', `${lat},${lng}`);
+      params.set('zoom', '16');
+    }
     const upstream = await fetch(`https://maps.googleapis.com/maps/api/staticmap?${params}`, {
       signal: AbortSignal.timeout(12000),
     });
@@ -259,6 +314,9 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       .filter(doc => !doc.data().status || doc.data().status === 'active')
       .map(doc => ({ id: doc.id, name: doc.data().name || doc.id, description: doc.data().description || '', partnerType: type, orgId: doc.data().orgId || doc.data().organizationId || null })) });
   }));
+  router.get('/tree-species', wrap(async (_req, res) => {
+    res.json({ species: FACTORS.map(({ id, species, scientificName }) => ({ id, name: species, scientificName })) });
+  }));
   router.post('/projects', wrap(async (req, res) => {
     const c = req.context;
     if (!c.canWrite) fail(403, 'Your approved roles allow viewing only.');
@@ -304,15 +362,101 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       if (!Number.isInteger(treeGoal) || treeGoal < 1 || treeGoal > 10000000) fail(400, 'Enter a tree goal between 1 and 10,000,000.');
     }
     const boundary = projectBoundary(req.body.boundary);
+    let totalArea = null;
+    if (req.body.totalArea != null) {
+      const value = Number(req.body.totalArea.value);
+      const unit = req.body.totalArea.unit;
+      const factors = { acres: 4046.8564224, hectares: 10000, 'sq m': 1 };
+      if (!Number.isFinite(value) || value <= 0 || value > 1_000_000_000 || !Object.hasOwn(factors, unit)) {
+        fail(400, 'Enter a valid positive project area in acres, hectares or sq m.');
+      }
+      totalArea = { value, unit, squareMetres: value * factors[unit] };
+    }
+    let plannedSpecies;
+    if (req.body.plannedSpecies !== undefined) {
+      if (!Array.isArray(req.body.plannedSpecies) || req.body.plannedSpecies.length > 100) {
+        fail(400, 'Planned species must be a list of up to 100 entries.');
+      }
+      plannedSpecies = req.body.plannedSpecies.map(item => {
+        const species = typeof item?.species === 'string' ? item.species.trim() : '';
+        const count = Number(item?.count);
+        if (!species || species.length > 100 || !Number.isInteger(count) || count < 1 || count > 10_000_000) {
+          fail(400, 'Each planned species needs a name and a count between 1 and 10,000,000.');
+        }
+        return { species, count };
+      });
+    }
+    const treeOutcomeIds = new Set([
+      'native_tree_cover',
+      'biodiversity_habitat',
+      'carbon_sequestration',
+      'soil_health',
+      'watershed_health',
+      'community_benefits',
+    ]);
+    const outcomes = req.body.outcomes === undefined ? [] : req.body.outcomes;
+    if (!Array.isArray(outcomes) || outcomes.some(id => typeof id !== 'string' || !treeOutcomeIds.has(id))) {
+      fail(400, 'Choose valid outcomes for this tree planting project.');
+    }
+    if (new Set(outcomes).size === 0) fail(400, 'Select at least one tree planting project outcome.');
+    const managedService = await selectedPartner(db, req.body.managedServicePartnerId, 'managed_service', true);
+    const verificationAssistance = req.body.verificationAssistance ?? false;
+    if (typeof verificationAssistance !== 'boolean') fail(400, 'Verification assistance selection must be Yes or No.');
+    const assuranceInput = req.body.assurancePartners ?? [];
+    if (!Array.isArray(assuranceInput)) fail(400, 'Assurance partners must be a list.');
+    const assurancePartners = [];
+    for (const item of assuranceInput) {
+      if (!item || typeof item !== 'object' || !item.partnerId || !ASSURANCE_ROLES.has(item.role)) {
+        fail(400, 'Choose a valid assurance partner and role.');
+      }
+      const partner = await selectedPartner(db, item.partnerId, 'assurance', true);
+      assurancePartners.push({ ...partner, partnerType: 'assurance', role: item.role });
+    }
+    const isCsr = req.body.isCsr ?? false;
+    if (typeof isCsr !== 'boolean') fail(400, 'CSR selection must be Yes or No.');
+    const csrFinancialYear = isCsr ? req.body.csrFinancialYear : null;
+    if (isCsr && (typeof csrFinancialYear !== 'string' || !/^\d{4}-\d{2}$/.test(csrFinancialYear))) {
+      fail(400, 'Choose a valid CSR financial year.');
+    }
+    let csrBudget = null;
+    if (isCsr && req.body.csrBudget != null) {
+      const amount = Number(typeof req.body.csrBudget === 'object' ? req.body.csrBudget.amount : req.body.csrBudget);
+      if (!Number.isFinite(amount) || amount < 0 || amount > 1_000_000_000_000) fail(400, 'Enter a valid CSR budget amount.');
+      csrBudget = { amount, currencyCode: 'INR' };
+    }
+    const timestamp = new Date().toISOString();
+    const notificationPartners = [
+      { ...managedService, partnerType: 'managed_service', role: 'Managed service partner' },
+      ...assurancePartners,
+    ];
+    const projectDescription = typeof req.body.description === 'string'
+      ? req.body.description.trim()
+      : '';
+    if (projectDescription.length > 2000) {
+      fail(400, 'Description must be at most 2000 characters.');
+    }
     const project = {
-      name: text(req.body.name, 'Project name', 100), description: text(req.body.description, 'Description', 2000),
+      name: text(req.body.name, 'Project name', 100), description: projectDescription,
       locationName: text(req.body.locationName, 'Location', 200), scope: req.body.scope,
       startDate, endDate,
       ...(treeGoal !== undefined ? { treeGoal } : {}),
-      orgId, departmentId, createdByUid: c.uid, createdAt: new Date().toISOString(), status: 'active',
+      ...(totalArea ? { totalArea } : {}),
+      ...(plannedSpecies ? { plannedSpecies } : {}),
+      outcomes: [...new Set(outcomes)],
+      managedServicePartnerId: managedService.partnerId,
+      managedServicePartnerName: managedService.name,
+      verificationAssistance,
+      assurancePartners: assurancePartners.map(({ partnerOrgId, ...partner }) => partner),
+      isCsr,
+      csrFinancialYear,
+      csrBudget,
+      orgId, departmentId, createdByUid: c.uid, createdAt: timestamp, status: 'active',
+      updatedAt: timestamp,
       ...(boundary ? { boundary } : {}),
     };
     const ref = await projects.add(project);
+    await saveProjectRelations(ref, project, notificationPartners);
+    await queuePartnerNotifications(db, ref.id, project, notificationPartners);
     await inAppNotifications.projectCreated({ projectId: ref.id, project, orgId }).catch((error) => {
       logger.warn('Project-created notification could not be queued', { projectId: ref.id, error: error.message });
     });
@@ -552,7 +696,15 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   router.get('/project-notifications', wrap(async (req, res) => {
     const orgId = req.context.orgId;
     if (!orgId) return res.json({ notifications: [] });
-    await inAppNotifications.materializeDueGrowthReminders(orgId);
+    await inAppNotifications.materializeDueGrowthReminders(orgId).catch((error) => {
+      // A missing or still-building Firestore index must not make the entire
+      // notifications feed unavailable. Existing notifications remain useful;
+      // due reminders can be materialized on the next refresh.
+      logger.warn('Due growth reminders could not be materialized', {
+        orgId,
+        error: error.message,
+      });
+    });
     const [directoryByOrg, directoryByOrganization] = await Promise.all([
       db.collection('partnerDirectory').where('orgId', '==', orgId).limit(100).get(),
       db.collection('partnerDirectory').where('organizationId', '==', orgId).limit(100).get(),

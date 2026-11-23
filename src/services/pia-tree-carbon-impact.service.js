@@ -65,7 +65,8 @@ function makeSummary(projectId, records, calculatedAt) {
   let provisionalPlantings = 0;
 
   for (const record of records) {
-    const plantedAt = typeof record.capturedAt === "string" ? Date.parse(record.capturedAt) : NaN;
+    const plantingDate = record.plantingDate || record.capturedAt;
+    const plantedAt = typeof plantingDate === "string" ? Date.parse(plantingDate) : NaN;
     const plantedCount = record.kind === "seed_spot"
       ? Number(record.seedCount || 0)
       : 1;
@@ -237,7 +238,7 @@ function createPiaTreeCarbonImpact({ db, now = () => new Date() }) {
     const { summary, plantings } = makeSummary(projectId, records, calculatedAt);
     const snapshotInput = records.map((record) => ({
       plantingId: record.id,
-      plantingDate: record.capturedAt || null,
+      plantingDate: record.plantingDate || record.capturedAt || null,
       species: record.species || null,
       kind: record.kind || null,
       plantedCount: record.kind === "seed_spot" ? Number(record.seedCount || 0) : 1,

@@ -69,11 +69,11 @@ function projectBoundary(input) {
 }
 function assertProjectBoundary(project, point) {
   const boundary = project?.boundary;
-  if (!boundary) return; // Preserve existing projects created before boundary support.
+  if (!boundary) return "unavailable"; // Preserve older projects and flag for review.
   const latitude = boundary.center?.latitude, longitude = boundary.center?.longitude, radiusMeters = boundary.radiusMeters;
   if (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) ||
       !Number.isFinite(longitude) || typeof radiusMeters !== 'number' || !Number.isFinite(radiusMeters) || radiusMeters <= 0) {
-    fail(409, 'This project has an invalid boundary. Ask an organisation owner to update it.');
+    return "unavailable";
   }
   const radians = Math.PI / 180, earthRadiusMeters = 6371008.8;
   if (Array.isArray(boundary.vertices) && boundary.vertices.length >= 3) {
@@ -83,27 +83,24 @@ function assertProjectBoundary(project, point) {
       const a = boundary.vertices[i], b = boundary.vertices[j];
       const cross = (x - a.longitude) * (b.latitude - a.latitude) - (y - a.latitude) * (b.longitude - a.longitude);
       if (Math.abs(cross) < 1e-8 && x >= Math.min(a.longitude, b.longitude) - 1e-8 && x <= Math.max(a.longitude, b.longitude) + 1e-8 &&
-          y >= Math.min(a.latitude, b.latitude) - 1e-8 && y <= Math.max(a.latitude, b.latitude) + 1e-8) return;
+          y >= Math.min(a.latitude, b.latitude) - 1e-8 && y <= Math.max(a.latitude, b.latitude) + 1e-8) return "inside";
       const crosses = (a.latitude > y) !== (b.latitude > y) &&
         x < (b.longitude - a.longitude) * (y - a.latitude) / (b.latitude - a.latitude) + a.longitude;
       if (crosses) inside = !inside;
     }
-    if (!inside) fail(400, 'This planting location is outside the drawn project boundary. Choose a point inside the mapped area.');
-    return;
+    return inside ? "inside" : "outside";
   }
   const lat1 = latitude * radians, lat2 = point.latitude * radians;
   const dLat = (point.latitude - latitude) * radians, dLon = (point.longitude - longitude) * radians;
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   const boundedA = Math.min(1, Math.max(0, a));
   const distanceMeters = 2 * earthRadiusMeters * Math.atan2(Math.sqrt(boundedA), Math.sqrt(1 - boundedA));
-  if (distanceMeters > radiusMeters) {
-    fail(400, 'This planting location is outside the project boundary. Choose a point inside the mapped radius.');
-  }
+  return distanceMeters > radiusMeters ? "outside" : "inside";
 }
 function treeMetadata(input, now = Date.now()) {
   if (!input || typeof input !== 'object') fail(400, 'Tree details are required.');
   if (!/^[a-f0-9]{32}$/.test(input.recordId || '')) fail(400, 'A valid record ID is required.');
-  for (const [key, min, max] of [['latitude', -90, 90], ['longitude', -180, 180], ['accuracyMeters', 0, 100]]) {
+  for (const [key, min, max] of [['latitude', -90, 90], ['longitude', -180, 180], ['accuracyMeters', 0, 20000000]]) {
     if (typeof input[key] !== 'number' || !Number.isFinite(input[key]) || input[key] < min || input[key] > max) fail(400, `Invalid ${key}. Refresh phone location.`);
   }
   if (!['camera', 'gallery'].includes(input.photoSource)) fail(400, 'Photo source is required.');
