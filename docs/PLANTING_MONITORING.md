@@ -35,7 +35,7 @@ Staging enables Gemini with a limit of 20 Gemini requests per UTC day. A complet
 - `GET /partner-app/projects/:projectId/plantings/remote-imagery`
 - `POST /partner-app/projects/:projectId/plantings/remote-imagery` accepts a source (`satellite`, `drone`, `fixed_camera`), capture date, source name, `[west,south,east,north]` footprint, optional resolution, record ID, notes and one preview image.
 
-These remote-imagery routes store and display team-uploaded imagery only and label it `site_context_only` / `not_individual_plant_verification`. Separately, authenticated `GET /partner-app/projects/:projectId/vegetation?from=YYYY-MM-DD&to=YYYY-MM-DD` returns a project-boundary Sentinel-2 L2A NDVI raster for area-level vegetation monitoring. It requires Copernicus Data Space OAuth secrets in Secret Manager. Sentinel-2 data is useful for broader site change, not an individual small sapling; the app allows pinch zoom but cannot add detail beyond the source pixel resolution.
+These remote-imagery routes store and display team-uploaded imagery only and label it `site_context_only` / `not_individual_plant_verification`. The Sentinel-2 vegetation-analysis endpoint is disabled and is not exposed by the partner API.
 
 ## Existing API compatibility
 

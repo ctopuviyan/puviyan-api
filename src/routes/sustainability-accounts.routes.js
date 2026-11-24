@@ -3,9 +3,11 @@ const { fail } = require('../services/partner-project-policy');
 const {
   createSustainabilityAccounts,
 } = require('../services/sustainability-accounts.service');
-function createSustainabilityRouter({ db, auth, options = {} }) {
+const { createAccountDeletion } = require('../services/account-deletion.service');
+function createSustainabilityRouter({ db, auth, options = {}, getBucket, logger = console }) {
   const router = express.Router(),
     service = createSustainabilityAccounts({ db, auth, ...options });
+  const accountDeletion = createAccountDeletion({ db, auth, getBucket, logger });
   const wrap = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res)).catch(next);
   router.post(
@@ -71,6 +73,7 @@ function createSustainabilityRouter({ db, auth, options = {} }) {
           uid: d.uid,
           email: d.email || '',
           signInProvider: d.firebase?.sign_in_provider,
+          authTime: d.auth_time,
         };
       })
       .then(() => next(), next)
@@ -92,6 +95,9 @@ function createSustainabilityRouter({ db, auth, options = {} }) {
       res.json(await service.profile(req.identity, req.body))
     )
   );
+  router.delete('/account', wrap(async (req, res) =>
+    res.json(await accountDeletion.deleteAccount(req.identity, req.body?.confirmation))
+  ));
   router.get(
     '/members',
     wrap(async (req, res) => res.json(await service.listMembers(req.identity)))

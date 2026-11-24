@@ -11,7 +11,7 @@ const { createSustainabilityRouter } = require('./sustainability-accounts.routes
 const { requirePasswordIdentity } = require('../services/sustainability-accounts.service');
 const { createPlantingMonitoring } = require('../services/planting-monitoring.service');
 const { createPlantingPhotoAssessor } = require('../services/planting-photo-assessment.service');
-const { createProjectVegetation } = require('../services/project-vegetation.service');
+const { createAccountDeletion } = require('../services/account-deletion.service');
 const { createPiaTreeCarbonImpact, FACTORS } = require('../services/pia-tree-carbon-impact.service');
 const { createInAppProjectNotifications } = require('../services/in-app-project-notifications.service');
 const { ASSURANCE_ROLES, PARTNER_TYPES, buildWaterBodyProject, queuePartnerNotifications, saveProjectRelations, selectedPartner } = require('../services/water-body-project');
@@ -23,13 +23,13 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   getBucket = getPartnerTreeBucket, logger = console, managementOptions = {}, sustainabilityOptions = {}, monitoringOptions = {}, vegetationOptions = {} } = {}) {
   const router = express.Router();
   router.use(apiLimiter);
-  router.use('/v2', createSustainabilityRouter({db,auth,options:sustainabilityOptions}));
+  router.use('/v2', createSustainabilityRouter({db,auth,options:sustainabilityOptions, getBucket, logger}));
   const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   const projects = db.collection('partnerProjects');
   const management = createPartnerManagement({ db, auth, ...managementOptions });
   const assess = monitoringOptions.assess || createPlantingPhotoAssessor({ db });
   const monitoring = createPlantingMonitoring({ db, getBucket, logger, ...monitoringOptions, assess });
-  const vegetation = createProjectVegetation(vegetationOptions);
+  const accountDeletion = createAccountDeletion({ db, auth, getBucket, logger });
   const carbonImpact = createPiaTreeCarbonImpact({ db });
   const inAppNotifications = createInAppProjectNotifications({ db });
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 1, fieldSize: 16 * 1024 } });
@@ -40,20 +40,21 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       let decoded;
       try { decoded = await auth.verifyIdToken(token, true); }
       catch (_) { fail(401, 'Your session has expired. Please sign in again.'); }
-      req.identity = { uid: decoded.uid, email: decoded.email || '', signInProvider: decoded.firebase?.sign_in_provider };
+      req.identity = { uid: decoded.uid, email: decoded.email || '', signInProvider: decoded.firebase?.sign_in_provider, authTime: decoded.auth_time };
       const scopedMembership = await db.collection('partnerV2Users').doc(decoded.uid).get();
       const membership = scopedMembership.exists ? scopedMembership : await db.collection('partnerUsers').doc(decoded.uid).get();
       if (!scopedMembership.exists && membership.data()?.membershipVersion === 2) {
         await requirePasswordIdentity(auth,req.identity);
         const org = await db.collection('organizations').doc(membership.data().orgId).get();
-        if (!org.exists || org.data().status !== 'active') fail(403,'The organisation is inactive.');
+        const isAccountDeletion = req.path === '/account' && req.method === 'DELETE';
+        if ((!org.exists || !['active', 'deleting'].includes(org.data().status)) && !isAccountDeletion) fail(403,'The organisation is inactive.');
         const isProjectPartnerLookup = req.path === '/project-partners' && req.method === 'GET';
         const isProjectNotifications = req.path === '/project-notifications' && req.method === 'GET';
         const isTreeSpecies = req.path === '/tree-species' && req.method === 'GET';
         const isWaterBodyMasterRead = req.path === '/water-body/masters' && req.method === 'GET';
         const isMapTilesToken = req.path === '/maps/tiles/token' && req.method === 'GET';
         const isMapPreview = /^\/projects\/[^/]+\/report\/map$/.test(req.path) && req.method === 'GET';
-        if ((!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) && !isProjectPartnerLookup && !isProjectNotifications && !isTreeSpecies && !isWaterBodyMasterRead && !isMapTilesToken && !isMapPreview) || (req.path === '/account' && req.method !== 'GET')) fail(403,'Use the sustainability v2 account and member APIs.');
+        if ((!/^\/(projects(?:\/|$)|me$|account$)/.test(req.path) && !isProjectPartnerLookup && !isProjectNotifications && !isTreeSpecies && !isWaterBodyMasterRead && !isMapTilesToken && !isMapPreview) || (req.path === '/account' && !['GET', 'DELETE'].includes(req.method))) fail(403,'Use the sustainability v2 account and member APIs.');
         if (req.method === 'POST' && /\/trees$/.test(req.path)) fail(410,'Update the app to submit planting evidence with a capture session.');
       }
       next();
@@ -62,6 +63,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   // Authenticated account routes also serve invited users who are not onboarded yet.
   router.get('/account', wrap(async (req,res) => res.json(await management.account(req.identity))));
   router.patch('/account', wrap(async (req,res) => res.json(await management.profile(req.identity,req.body))));
+  router.delete('/account', wrap(async (req,res) => res.json(await accountDeletion.deleteAccount(req.identity, req.body?.confirmation))));
   router.get('/account/requests', wrap(async (req,res) => res.json(await management.ownRequests(req.identity))));
   router.post('/account/complete-signup', wrap(async (req,res) => res.json(await management.complete(req.identity,req.body.token))));
   router.use(async (req,_res,next) => {
@@ -813,16 +815,6 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   }));
   router.get('/projects/:id/plantings/nearby', wrap(async (req,res) => res.json(await monitoring.nearby(req.context,req.params.id,req.query))));
   router.get('/projects/:id/plantings/remote-imagery', wrap(async (req,res) => res.json(await monitoring.remoteList(req.context,req.params.id))));
-  router.get('/projects/:id/vegetation', wrap(async (req, res) => {
-    const { project } = await loadProject(req);
-    res.set('Cache-Control', 'private, max-age=300');
-    res.json(await vegetation.image({
-      projectId: req.params.id,
-      boundary: project.boundary,
-      from: req.query.from,
-      to: req.query.to,
-    }));
-  }));
   router.post('/projects/:id/plantings/remote-imagery', plantingUpload.single('photo'), wrap(async (req,res) => {
     if(!req.file) fail(400,'An imagery preview is required.');
     const result=await monitoring.remote(req.context,req.params.id,parsePlanting(req),req.file.buffer);res.status(result.created?201:200).json(result);

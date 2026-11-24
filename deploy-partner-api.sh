@@ -73,13 +73,6 @@ if gcloud secrets describe GOOGLE_MAPS_STATIC_API_KEY --project "$PROJECT_ID" >/
 else
   echo "Water-body report map previews will remain unavailable until GOOGLE_MAPS_STATIC_API_KEY exists in Secret Manager."
 fi
-if gcloud secrets describe COPERNICUS_CLIENT_ID --project "$PROJECT_ID" >/dev/null 2>&1 &&
-  gcloud secrets describe COPERNICUS_CLIENT_SECRET --project "$PROJECT_ID" >/dev/null 2>&1; then
-  SECRET_BINDINGS+=",COPERNICUS_CLIENT_ID=COPERNICUS_CLIENT_ID:latest,COPERNICUS_CLIENT_SECRET=COPERNICUS_CLIENT_SECRET:latest"
-else
-  echo "Sentinel-2 vegetation imagery will remain disabled until both Copernicus OAuth secrets exist in Secret Manager."
-fi
-
 gcloud run deploy "$SERVICE_NAME" \
   --source . \
   --platform managed \
