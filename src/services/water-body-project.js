@@ -50,7 +50,13 @@ function calendarDate(value, label, required) {
 
 async function selectedPartner(db, id, type, required) {
   if (id == null || id === '') {
-    if (required) fail(400, 'Choose an implementation partner.');
+    const labels = {
+      implementation: 'an implementation partner',
+      managed_service: 'a managed service partner',
+      supporting: 'a supporting partner',
+      assurance: 'an assurance partner',
+    };
+    if (required) fail(400, `Choose ${labels[type] || 'a project partner'}.`);
     return null;
   }
   if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id)) {

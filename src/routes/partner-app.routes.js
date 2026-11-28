@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const { fail, contextFor, assertOrg, text, validDate, projectBoundary, assertProjectBoundary, treeMetadata, imageType } = require('../services/partner-project-policy');
 
 const { getFirestore, getPartnerAuth } = require('../config/firebase.config');
-const { apiLimiter } = require('../middleware/rateLimit.middleware');
+const { apiLimiter, partnerAppLimiter } = require('../middleware/rateLimit.middleware');
 const { getPartnerTreeBucket } = require('../services/partner-tree-storage.service');
 const { createPartnerManagement } = require('../services/partner-management.service');
 const { createSustainabilityRouter } = require('./sustainability-accounts.routes');
@@ -14,6 +14,7 @@ const { createPlantingPhotoAssessor } = require('../services/planting-photo-asse
 const { createAccountDeletion } = require('../services/account-deletion.service');
 const { createPiaTreeCarbonImpact, FACTORS } = require('../services/pia-tree-carbon-impact.service');
 const { createInAppProjectNotifications } = require('../services/in-app-project-notifications.service');
+const { createTreeProjectActions } = require('../services/tree-project-actions.service');
 const { ASSURANCE_ROLES, PARTNER_TYPES, buildWaterBodyProject, queuePartnerNotifications, saveProjectRelations, selectedPartner } = require('../services/water-body-project');
 const waterOutcomeMasters = require('../services/water-body-outcomes');
 const { geohashForLocation } = require('geofire-common');
@@ -22,8 +23,7 @@ const { geohashForLocation } = require('geofire-common');
 function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   getBucket = getPartnerTreeBucket, logger = console, managementOptions = {}, sustainabilityOptions = {}, monitoringOptions = {}, vegetationOptions = {} } = {}) {
   const router = express.Router();
-  router.use(apiLimiter);
-  router.use('/v2', createSustainabilityRouter({db,auth,options:sustainabilityOptions, getBucket, logger}));
+  router.use('/v2', apiLimiter, createSustainabilityRouter({db,auth,options:sustainabilityOptions, getBucket, logger}));
   const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   const projects = db.collection('partnerProjects');
   const management = createPartnerManagement({ db, auth, ...managementOptions });
@@ -32,6 +32,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   const accountDeletion = createAccountDeletion({ db, auth, getBucket, logger });
   const carbonImpact = createPiaTreeCarbonImpact({ db });
   const inAppNotifications = createInAppProjectNotifications({ db });
+  const treeProjectActions = createTreeProjectActions({ db, getBucket });
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 1, fields: 1, fieldSize: 16 * 1024 } });
   router.use(async (req, _res, next) => {
     try {
@@ -60,6 +61,7 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       next();
     } catch (error) { next(error); }
   });
+  router.use(partnerAppLimiter);
   // Authenticated account routes also serve invited users who are not onboarded yet.
   router.get('/account', wrap(async (req,res) => res.json(await management.account(req.identity))));
   router.patch('/account', wrap(async (req,res) => res.json(await management.profile(req.identity,req.body))));
@@ -367,12 +369,45 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     let totalArea = null;
     if (req.body.totalArea != null) {
       const value = Number(req.body.totalArea.value);
-      const unit = req.body.totalArea.unit;
-      const factors = { acres: 4046.8564224, hectares: 10000, 'sq m': 1 };
-      if (!Number.isFinite(value) || value <= 0 || value > 1_000_000_000 || !Object.hasOwn(factors, unit)) {
+      const requestedUnit = req.body.totalArea.unit;
+      const units = {
+        ha: { unit: 'ha', squareMetresPerUnit: 10000 },
+        hectare: { unit: 'ha', squareMetresPerUnit: 10000 },
+        hectares: { unit: 'ha', squareMetresPerUnit: 10000 },
+        acre: { unit: 'acres', squareMetresPerUnit: 4046.8564224 },
+        acres: { unit: 'acres', squareMetresPerUnit: 4046.8564224 },
+        'sq m': { unit: 'sq m', squareMetresPerUnit: 1 },
+      };
+      const areaUnit = units[requestedUnit];
+      if (!Number.isFinite(value) || value <= 0 || value > 1_000_000_000 || !areaUnit) {
         fail(400, 'Enter a valid positive project area in acres, hectares or sq m.');
       }
-      totalArea = { value, unit, squareMetres: value * factors[unit] };
+      totalArea = { value, unit: areaUnit.unit, squareMetres: value * areaUnit.squareMetresPerUnit };
+    }
+    const plantingSitePreparationInput = req.body.plantingSitePreparation ?? [];
+    if (!Array.isArray(plantingSitePreparationInput) || plantingSitePreparationInput.length > 50) {
+      fail(400, 'Planting-site preparation must be a list of up to 50 actions.');
+    }
+    const plantingSitePreparation = [...new Set(plantingSitePreparationInput.map((item) => {
+      if (typeof item !== 'string' || !item.trim() || item.trim().length > 120) {
+        fail(400, 'Each planting-site preparation action must be between 1 and 120 characters.');
+      }
+      return item.trim();
+    }))];
+    let monitoringPeriodYears;
+    if (req.body.monitoringPeriodYears != null) {
+      monitoringPeriodYears = Number(req.body.monitoringPeriodYears);
+      if (!Number.isInteger(monitoringPeriodYears) || ![1, 3, 5, 10, 15, 20].includes(monitoringPeriodYears)) {
+        fail(400, 'Choose a supported monitoring period: 1, 3, 5, 10, 15 or 20 years.');
+      }
+    }
+    const monitoringFrequency = req.body.monitoringFrequency ?? 'Annually';
+    if (!['Annually', 'Semi-annually', 'Quarterly'].includes(monitoringFrequency)) {
+      fail(400, 'Choose Annually, Semi-annually or Quarterly monitoring frequency.');
+    }
+    const droneSurveyEnabled = req.body.droneSurveyEnabled ?? false;
+    if (typeof droneSurveyEnabled !== 'boolean') {
+      fail(400, 'Drone survey selection must be Yes or No.');
     }
     let plannedSpecies;
     if (req.body.plannedSpecies !== undefined) {
@@ -401,9 +436,19 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       fail(400, 'Choose valid outcomes for this tree planting project.');
     }
     if (new Set(outcomes).size === 0) fail(400, 'Select at least one tree planting project outcome.');
-    const managedService = await selectedPartner(db, req.body.managedServicePartnerId, 'managed_service', true);
     const verificationAssistance = req.body.verificationAssistance ?? false;
     if (typeof verificationAssistance !== 'boolean') fail(400, 'Verification assistance selection must be Yes or No.');
+    const managedService = await selectedPartner(db, req.body.managedServicePartnerId, 'managed_service', verificationAssistance);
+    const implementationPartner = await selectedPartner(db, req.body.implementationPartnerId, 'implementation', false);
+    const supportingPartnerIds = req.body.supportingPartnerIds ?? [];
+    if (!Array.isArray(supportingPartnerIds) || supportingPartnerIds.length > 50) {
+      fail(400, 'Supporting organisations must be a list of up to 50 partners.');
+    }
+    const supportingPartners = [];
+    for (const partnerId of [...new Set(supportingPartnerIds)]) {
+      const partner = await selectedPartner(db, partnerId, 'supporting', true);
+      supportingPartners.push(partner);
+    }
     const assuranceInput = req.body.assurancePartners ?? [];
     if (!Array.isArray(assuranceInput)) fail(400, 'Assurance partners must be a list.');
     const assurancePartners = [];
@@ -428,7 +473,9 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
     }
     const timestamp = new Date().toISOString();
     const notificationPartners = [
-      { ...managedService, partnerType: 'managed_service', role: 'Managed service partner' },
+      ...(managedService ? [{ ...managedService, partnerType: 'managed_service', role: 'Managed service partner' }] : []),
+      ...(implementationPartner ? [{ ...implementationPartner, partnerType: 'implementation', role: 'Implementation partner' }] : []),
+      ...supportingPartners.map((partner) => ({ ...partner, partnerType: 'supporting', role: 'Supporting partner' })),
       ...assurancePartners,
     ];
     const projectDescription = typeof req.body.description === 'string'
@@ -444,9 +491,17 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       ...(treeGoal !== undefined ? { treeGoal } : {}),
       ...(totalArea ? { totalArea } : {}),
       ...(plannedSpecies ? { plannedSpecies } : {}),
+      ...(monitoringPeriodYears !== undefined ? { monitoringPeriodYears } : {}),
+      monitoringFrequency,
+      droneSurveyEnabled,
+      plantingSitePreparation,
       outcomes: [...new Set(outcomes)],
-      managedServicePartnerId: managedService.partnerId,
-      managedServicePartnerName: managedService.name,
+      implementationPartnerId: implementationPartner?.partnerId ?? null,
+      implementationPartnerName: implementationPartner?.name ?? null,
+      supportingPartnerIds: supportingPartners.map((partner) => partner.partnerId),
+      supportingPartners: supportingPartners.map(({ partnerOrgId, ...partner }) => partner),
+      managedServicePartnerId: managedService?.partnerId ?? null,
+      managedServicePartnerName: managedService?.name ?? null,
       verificationAssistance,
       assurancePartners: assurancePartners.map(({ partnerOrgId, ...partner }) => partner),
       isCsr,
@@ -724,12 +779,13 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
   router.get('/projects/:id', wrap(async (req, res) => {
     const { ref, project } = await loadProject(req);
     const isWaterBody = project.scope === 'water_body_rejuvenation';
-    const [events, trees, outcomes, partners, impact] = await Promise.all([
+    const [events, trees, outcomes, partners, impact, activity] = await Promise.all([
       isWaterBody ? Promise.resolve({ docs: [] }) : ref.collection('events').limit(500).get(),
       isWaterBody ? Promise.resolve({ docs: [] }) : ref.collection('trees').limit(500).get(),
       ref.collection('outcomes').limit(100).get(),
       ref.collection('partners').limit(100).get(),
       isWaterBody ? Promise.resolve(null) : carbonImpact.calculateProject(ref.id, project),
+      ref.collection('activity').orderBy('createdAt', 'desc').limit(100).get(),
     ]);
     const records = await Promise.all(trees.docs.map(async doc => {
       const { storagePath, contextStoragePath, fingerprint, imageHashes, perceptualHash, contextPerceptualHash, captureSessionId, ...record } = doc.data();
@@ -739,7 +795,37 @@ function createPartnerAppRouter({ db = getFirestore(), auth = getPartnerAuth(),
       if (contextStoragePath) [result.contextPhotoUrl] = await getBucket().file(contextStoragePath).getSignedUrl({ action: 'read', expires: Date.now() + 15 * 60 * 1000 });
       return result;
     }));
-    res.json({ project: { id: ref.id, ...project, outcomeDetails: outcomes.docs.map(serialise), projectPartners: partners.docs.map(serialise), carbonImpact: impact?.summary || null }, events: sortLatest(events.docs.map(serialise)), trees: sortLatest(records) });
+    res.json({ project: { id: ref.id, ...project, outcomeDetails: outcomes.docs.map(serialise), projectPartners: partners.docs.map(serialise), carbonImpact: impact?.summary || null }, events: sortLatest(events.docs.map(serialise)), trees: sortLatest(records), activity: activity.docs.map(serialise) });
+  }));
+  // Tree planting-site actions and evidence use a separate namespace from
+  // water-body outcomes and planting records. All files remain in the private
+  // partner tree bucket and are exposed only through short-lived signed URLs.
+  const treeActionUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024, files: 1, fields: 2, fieldSize: 2048 } });
+  router.get('/projects/:id/tree-actions', wrap(async (req, res) => {
+    const { ref, project } = await loadProject(req);
+    if (project.scope !== 'plant_trees') fail(400, 'Site actions belong to Plant Trees projects.');
+    res.json(await treeProjectActions.list(ref));
+  }));
+  router.post('/projects/:id/tree-actions', wrap(async (req, res) => {
+    const { ref, project } = await loadProject(req, true);
+    if (project.scope !== 'plant_trees') fail(400, 'Site actions belong to Plant Trees projects.');
+    res.status(201).json({ action: await treeProjectActions.create(ref, req.body?.name, req.context.uid) });
+  }));
+  router.patch('/projects/:id/tree-actions/:actionId', wrap(async (req, res) => {
+    const { ref, project } = await loadProject(req, true);
+    if (project.scope !== 'plant_trees') fail(400, 'Site actions belong to Plant Trees projects.');
+    res.json({ action: await treeProjectActions.update(ref, req.params.actionId, req.body || {}, req.context.uid) });
+  }));
+  router.post('/projects/:id/tree-actions/:actionId/evidence', async (req, res, next) => {
+    try {
+      const loaded = await loadProject(req, true);
+      if (loaded.project.scope !== 'plant_trees') fail(400, 'Site evidence belongs to Plant Trees projects.');
+      req.loadedTreeActionProject = loaded;
+      next();
+    } catch (error) { next(error); }
+  }, treeActionUpload.single('file'), wrap(async (req, res) => {
+    const { ref, project } = req.loadedTreeActionProject;
+    res.status(201).json(await treeProjectActions.addEvidence(ref, project.orgId, req.params.actionId, req.context.uid, req.file, req.body || {}));
   }));
   router.post('/projects/:id/events', wrap(async (req, res) => {
     const { ref, project } = await loadProject(req, true);
